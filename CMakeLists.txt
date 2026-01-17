@@ -11,8 +11,14 @@ set(SOURCES
     main.c
 )
 
+# Add subdirectories
+add_subdirectory(fcb)
+
 # Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
+
+# Link libraries
+target_link_libraries(${PROJECT_NAME} PRIVATE fcb)
 
 # Basic compiler options for GCC
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
