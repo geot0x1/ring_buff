@@ -38,4 +38,11 @@ void flash_erase_sector(uint32_t base_addr);
  */
 void flash_full_erase(void);
 
+/**
+ * @brief Print sector contents for debugging.
+ * 
+ * @param addr Any address within the sector to print.
+ */
+void flash_print_sector(uint32_t addr);
+
 #endif // FLASH_MEM_H

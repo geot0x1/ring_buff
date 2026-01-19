@@ -20,5 +20,5 @@ if (condition) {
     // code
 }
 
-## Indentation
+## Indentation Style
 * Use 4 spaces
