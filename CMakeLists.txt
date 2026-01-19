@@ -14,12 +14,13 @@ set(SOURCES
 # Add subdirectories
 add_subdirectory(fcb)
 add_subdirectory(flash_mem)
+add_subdirectory(crc32)
 
 # Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
 
 # Link libraries
-target_link_libraries(${PROJECT_NAME} PRIVATE fcb flash_mem)
+target_link_libraries(${PROJECT_NAME} PRIVATE fcb flash_mem crc32)
 
 # Basic compiler options for GCC
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
