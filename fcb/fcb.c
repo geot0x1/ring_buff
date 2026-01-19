@@ -102,3 +102,20 @@ void fcb_write_sector_header(uint32_t sector_num, SectorHeader *header) {
   /* Write the header to the very beginning of the sector */
   flash_write(sector_addr, header, sizeof(SectorHeader));
 }
+
+/**
+ * @brief Read a sector header from the beginning of a flat sector.
+ *
+ * @param sector_num The index of the sector (0 to FLASH_SECTOR_COUNT - 1).
+ * @param header Pointer to the SectorHeader structure to be populated.
+ */
+void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header) {
+  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL) {
+    return;
+  }
+
+  uint32_t sector_addr = sector_num * FLASH_SECTOR_SIZE;
+
+  /* Read the header from the very beginning of the sector */
+  flash_read(sector_addr, header, sizeof(SectorHeader));
+}
