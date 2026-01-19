@@ -5,8 +5,9 @@ trigger: always_on
 # C/C++ Coding Standards
 
 ## Bracing Style
-* **Always** place braces on a new line (Allman style).
-* Apply this to functions, loops, and conditional statements.
+* **Always** use **Allman style** bracing (braces on a new line).
+* Do not use K&R style (braces on the same line).
+* Indentation 4 spaces
 
 ## Examples
 // Good
