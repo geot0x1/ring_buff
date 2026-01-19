@@ -28,9 +28,10 @@ int main() {
   const char *test_msgs[] = {
       "Message 1: Small",
       "Message 2: Medium length message for testing",
-      "Message 3: A slightly longer message to see how pointers advance"};
+      "Message 3: A slightly longer message to see how pointers advance",
+      "Odd Length!"}; // 11 bytes
 
-  for (int i = 0; i < 3; i++)
+  for (int i = 0; i < 4; i++)
   {
     printf("\n--- Append %d ---\n", i + 1);
     printf("Appending: \"%s\" - %d bytes\n", test_msgs[i], strlen(test_msgs[i]));

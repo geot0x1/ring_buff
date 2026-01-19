@@ -388,21 +388,20 @@ static uint32_t fcb_find_sector_head_offset(uint32_t sector_num)
         return offset;
       }
 
-      /* Advance by 4 bytes since we found a non-FF word */
-      offset += 4;
-    } else
+      /* Advance by 1 byte since we found a non-FF word or it's not a full FF block */
+      offset += 1;
+    }
+    else
     {
       struct ItemKey key;
       if (fcb_read_item_at(sector_addr + offset, &key) == 0)
       {
         /* Valid item, skip it */
         offset += sizeof(struct ItemKey) + key.len;
-        /* Re-align to 4 bytes if necessary (though items should be aligned) */
-        offset = (offset + 3) & ~3;
       } else
       {
-        /* Corrupted or non-FF data, jump to next 4-byte boundary */
-        offset += 4;
+        /* Corrupted or non-FF data, jump to next byte */
+        offset += 1;
       }
     }
   }
@@ -438,8 +437,8 @@ static uint32_t fcb_find_sector_tail_offset(uint32_t sector_num)
       break;
     }
 
-    /* Jump to next 4-byte boundary */
-    offset += 4;
+    /* Jump to next byte */
+    offset += 1;
   }
 
   return 0xFFFFFFFF;
@@ -645,9 +644,8 @@ int fcb_append(Fcb *fcb, const void *data, uint16_t len)
   flash_write(fcb->write_addr, &key, sizeof(struct ItemKey));
   flash_write(fcb->write_addr + sizeof(struct ItemKey), data, len);
 
-  /* Advance the write address and align to 4 bytes */
+  /* Advance the write address */
   fcb->write_addr += item_size;
-  fcb->write_addr = (fcb->write_addr + 3) & ~3;
 
   return 0;
 }

@@ -7,7 +7,6 @@ trigger: always_on
 ## Bracing Style
 * **Always** use **Allman style** bracing (braces on a new line).
 * Do not use K&R style (braces on the same line).
-* Indentation 4 spaces
 
 ## Examples
 // Good
@@ -20,3 +19,6 @@ if (condition)
 if (condition) {
     // code
 }
+
+## Indentation
+* Use 4 spaces
