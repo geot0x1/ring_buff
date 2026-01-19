@@ -39,6 +39,21 @@ typedef struct __attribute__((aligned(4))) {
   uint32_t state; /**< Lifecycle state (STATE_FRESH/ALLOCATED/FULL/CONSUMED) */
 } SectorHeader;
 
+/* ============================================================================
+ * Entry Header Definition
+ * Total Size: 12 Bytes (4-byte aligned)
+ * ============================================================================
+ */
+struct ItemKey {
+  uint16_t magic;  // Sync marker (e.g., 0xA55A)
+  uint16_t len;    // Length of the following data payload
+  uint32_t crc;    // CRC32 of the Data payload (and maybe len)
+  uint32_t status; // Per-message lifecycle state
+};
+
+/* Static assertion to verify struct size is exactly 12 bytes */
+_Static_assert(sizeof(struct ItemKey) == 12, "ItemKey must be 12 bytes");
+
 /* Static assertion to verify struct size is exactly 16 bytes */
 _Static_assert(sizeof(SectorHeader) == 16, "SectorHeader must be 16 bytes");
 
@@ -72,6 +87,21 @@ static void fcb_append_sector(Fcb *fcb, uint32_t sector_num);
 #define STATE_ALLOCATED 0x7FFFFFFF /**< Write in progress */
 #define STATE_CONSUMED 0x0FFFFFFF /**< Garbage, ready for erase */
 #define STATE_INVALID 0x00000000 /**< Invalid sector header */
+
+/* ============================================================================
+ * Entry Constants
+ * ============================================================================
+ */
+
+/* * Status Bit Definitions (Transition 1 -> 0)
+ * * Initial (Erased): 0xFFFFFFFF
+ * Written (Valid):  0x0000FFFF (Top 16 bits cleared)
+ * Popped (Done):    0x00000000 (All bits cleared)
+ */
+#define FCB_ENTRY_MAGIC 0xA55A
+#define FCB_STATUS_ERASED 0xFFFFFFFF
+#define FCB_STATUS_VALID 0x0000FFFF
+#define FCB_STATUS_POPPED 0x00000000
 
 /*============================================================================
  * Sequence ID Rollover-Safe Comparison Macros
