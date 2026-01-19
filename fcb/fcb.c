@@ -13,6 +13,13 @@
 #include <string.h>
 
 /*============================================================================
+ * Private Function Prototypes
+ *============================================================================*/
+
+static uint32_t fcb_read_header_status(uint32_t sector_num);
+static void fcb_append_sector(Fcb *fcb, uint32_t sector_num);
+
+/*============================================================================
  * Constants
  *============================================================================*/
 
@@ -30,9 +37,9 @@
  *   FRESH (erased) -> ALLOCATED (writing) -> CONSUMED (garbage)
  *   0xFFFFFFFF     -> 0x7FFFFFFF          -> 0x0FFFFFFF
  */
-#define STATE_FRESH 0xFFFFFFFF     /**< Erased sector, ready for use */
+#define STATE_FRESH 0xFFFFFFFF /**< Erased sector, ready for use */
 #define STATE_ALLOCATED 0x7FFFFFFF /**< Write in progress */
-#define STATE_CONSUMED 0x0FFFFFFF  /**< Garbage, ready for erase */
+#define STATE_CONSUMED 0x0FFFFFFF /**< Garbage, ready for erase */
 
 /*============================================================================
  * Sequence ID Rollover-Safe Comparison Macros
@@ -120,6 +127,24 @@ void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header) {
 
   /* Read the header from the very beginning of the sector */
   flash_read(sector_addr, header, sizeof(SectorHeader));
+}
+
+/**
+ * @brief Read the status field from a sector header.
+ *
+ * @param sector_num The index of the sector (0 to FLASH_SECTOR_COUNT - 1).
+ * @return uint32_t The state value from the header.
+ */
+static uint32_t fcb_read_header_status(uint32_t sector_num) {
+  SectorHeader header;
+
+  if (sector_num >= FLASH_SECTOR_COUNT) {
+    return STATE_CONSUMED; /* Return a safe default or specific error state */
+  }
+
+  fcb_read_sector_header(sector_num, &header);
+
+  return header.state;
 }
 
 /**
