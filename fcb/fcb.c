@@ -200,8 +200,8 @@ int fcb_mount(Fcb *fcb) {
 
   uint32_t highest_seq = 0;
   uint32_t lowest_seq = 0xFFFFFFFF;
-  int newest_sector = -1;
-  int oldest_sector = -1;
+  int head = -1;
+  int tail = -1;
   SectorHeader header;
 
   for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++) {
@@ -213,19 +213,20 @@ int fcb_mount(Fcb *fcb) {
     }
 
     /* Track the newest sector (highest sequence ID) */
-    if (newest_sector == -1 || SEQ_IS_NEWER(header.sequence_id, highest_seq)) {
+    /* Track the newest sector (highest sequence ID) */
+    if (head == -1 || SEQ_IS_NEWER(header.sequence_id, highest_seq)) {
       highest_seq = header.sequence_id;
-      newest_sector = (int)i;
+      head = (int)i;
     }
 
     /* Track the oldest sector (lowest sequence ID) */
-    if (oldest_sector == -1 || SEQ_IS_OLDER(header.sequence_id, lowest_seq)) {
+    if (tail == -1 || SEQ_IS_OLDER(header.sequence_id, lowest_seq)) {
       lowest_seq = header.sequence_id;
-      oldest_sector = (int)i;
+      tail = (int)i;
     }
   }
 
-  if (newest_sector == -1) {
+  if (head == -1) {
     /* No active sectors found, start with the first sector */
     fcb->current_sector_id = 0;
     fcb->write_addr =
@@ -240,10 +241,8 @@ int fcb_mount(Fcb *fcb) {
 
   /* Initialize tracking addresses */
   /* For now, we assume the data follows the header. */
-  fcb->write_addr =
-      (uint32_t)newest_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
-  fcb->read_addr =
-      (uint32_t)oldest_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  fcb->write_addr = (uint32_t)head * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  fcb->read_addr = (uint32_t)tail * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
   fcb->delete_addr = fcb->read_addr;
 
   return 0;
