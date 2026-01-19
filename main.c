@@ -25,20 +25,30 @@ int main() {
   printf("  Current Sector ID: %u\n", fcb.current_sector_id);
   printf("  Write Addr:  0x%08X\n", fcb.write_addr);
 
-  const char *test_msg = "Hello FCB! This is a test message.";
-  printf("Appending: \"%s\"\n", test_msg);
+  const char *test_msgs[] = {
+      "Message 1: Small",
+      "Message 2: Medium length message for testing",
+      "Message 3: A slightly longer message to see how pointers advance"};
 
-  rc = fcb_append(&fcb, test_msg, (uint16_t)strlen(test_msg));
-  if (rc == 0) {
-    printf("Append success!\n");
-  } else {
-    printf("Append failed with code %d\n", rc);
+  for (int i = 0; i < 3; i++)
+  {
+    printf("\n--- Append %d ---\n", i + 1);
+    printf("Appending: \"%s\" - %d bytes\n", test_msgs[i], strlen(test_msgs[i]));
+
+    rc = fcb_append(&fcb, test_msgs[i], (uint16_t)strlen(test_msgs[i]));
+    if (rc == 0)
+    {
+      printf("Append success!\n");
+    } else
+    {
+      printf("Append failed with code %d\n", rc);
+    }
+
+    printf("New State:\n");
+    printf("  Write Addr:  0x%08X\n", fcb.write_addr);
+    printf("  Read Addr:   0x%08X\n", fcb.read_addr);
   }
-
-  printf("Updated State:\n");
-  printf("  Current Sector ID: %u\n", fcb.current_sector_id);
-  printf("  Write Addr:  0x%08X\n", fcb.write_addr);
-  printf("  Read Addr:   0x%08X\n", fcb.read_addr);
 
   return 0;
 }
+

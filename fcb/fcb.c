@@ -645,8 +645,9 @@ int fcb_append(Fcb *fcb, const void *data, uint16_t len)
   flash_write(fcb->write_addr, &key, sizeof(struct ItemKey));
   flash_write(fcb->write_addr + sizeof(struct ItemKey), data, len);
 
-  /* Advance the write address */
+  /* Advance the write address and align to 4 bytes */
   fcb->write_addr += item_size;
+  fcb->write_addr = (fcb->write_addr + 3) & ~3;
 
   return 0;
 }
