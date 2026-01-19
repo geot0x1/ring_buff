@@ -6,6 +6,8 @@
  * for a NOR flash circular buffer system.
  */
 
+#include "fcb.h"
+#include "crc32.h"
 #include "flash_mem.h"
 #include <stdint.h>
 #include <string.h>
@@ -118,4 +120,31 @@ void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header) {
 
   /* Read the header from the very beginning of the sector */
   flash_read(sector_addr, header, sizeof(SectorHeader));
+}
+
+/**
+ * @brief Reserve the next sector by writing an ALLOCATED header.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @param sector_num The index of the sector to be reserved.
+ */
+static void fcb_append_sector(Fcb *fcb, uint32_t sector_num) {
+  if (fcb == NULL || sector_num >= FLASH_SECTOR_COUNT) {
+    return;
+  }
+
+  SectorHeader header;
+  memset(&header, 0, sizeof(SectorHeader));
+
+  fcb->current_sector_id++;
+
+  header.magic = SECTOR_MAGIC;
+  header.sequence_id = fcb->current_sector_id;
+  header.state = STATE_ALLOCATED;
+
+  /* Calculate CRC32 over magic and sequence_id (8 bytes) */
+  header.header_crc = crc32_gen(&header, 8);
+
+  /* Write the header to the beginning of the sector */
+  fcb_write_sector_header(sector_num, &header);
 }
