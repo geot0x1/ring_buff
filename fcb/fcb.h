@@ -30,6 +30,16 @@ typedef struct {
 int fcb_mount(Fcb *fcb);
 
 /**
+ * @brief Append an item to the FCB.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @param data Pointer to the data to be written.
+ * @param len Length of the data in bytes.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_append(Fcb *fcb, const void *data, uint16_t len);
+
+/**
  * @brief Erase all sectors associated with the FCB and reset its state.
  *
  * @param fcb Pointer to the FCB logistics structure.

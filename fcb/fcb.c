@@ -327,3 +327,60 @@ int fcb_erase(Fcb *fcb) {
 
   return 0;
 }
+/**
+ * @brief Append an item to the FCB.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @param data Pointer to the data to be written.
+ * @param len Length of the data in bytes.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_append(Fcb *fcb, const void *data, uint16_t len) {
+  if (fcb == NULL || data == NULL || len == 0) {
+    return -1;
+  }
+
+  uint32_t item_size = sizeof(struct ItemKey) + len;
+
+  /* Check if current sector has room for the item */
+  uint32_t current_sector_num = fcb->write_addr / FLASH_SECTOR_SIZE;
+  uint32_t offset_in_sector = fcb->write_addr % FLASH_SECTOR_SIZE;
+
+  if (offset_in_sector + item_size > FLASH_SECTOR_SIZE) {
+    /* Not enough space in current sector, move to the next one */
+    uint32_t next_sector = current_sector_num + 1;
+    if (next_sector > fcb->last_sector) {
+      next_sector = fcb->first_sector;
+    }
+
+    /* Check if we are about to overwrite the oldest sector (tail) */
+    uint32_t tail_sector = fcb->read_addr / FLASH_SECTOR_SIZE;
+    if (next_sector == tail_sector) {
+      /* Buffer is full */
+      return -2;
+    }
+
+    /* Erase and initialize the new sector */
+    flash_erase_sector(next_sector * FLASH_SECTOR_SIZE);
+    fcb_append_sector(fcb, next_sector);
+
+    /* Update write address to start after the new sector header */
+    fcb->write_addr = next_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  }
+
+  /* Prepare the item key */
+  struct ItemKey key;
+  key.magic = FCB_ENTRY_MAGIC;
+  key.len = len;
+  key.crc = crc32_gen(data, len);
+  key.status = FCB_STATUS_VALID;
+
+  /* Write the item key and payload to flash */
+  flash_write(fcb->write_addr, &key, sizeof(struct ItemKey));
+  flash_write(fcb->write_addr + sizeof(struct ItemKey), data, len);
+
+  /* Advance the write address */
+  fcb->write_addr += item_size;
+
+  return 0;
+}
