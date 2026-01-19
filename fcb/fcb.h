@@ -21,4 +21,20 @@ typedef struct {
                            (deleted) */
 } Fcb;
 
+/**
+ * @brief Initialize the FCB by scanning the flash sectors.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_mount(Fcb *fcb);
+
+/**
+ * @brief Erase all sectors associated with the FCB and reset its state.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_erase(Fcb *fcb);
+
 #endif // FCB_H

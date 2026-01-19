@@ -173,3 +173,103 @@ static void fcb_append_sector(Fcb *fcb, uint32_t sector_num) {
   /* Write the header to the beginning of the sector */
   fcb_write_sector_header(sector_num, &header);
 }
+
+/**
+ * @brief Initialize the FCB by scanning the flash sectors.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_mount(Fcb *fcb) {
+  if (fcb == NULL) {
+    return -1;
+  }
+
+  uint32_t highest_seq = 0;
+  uint32_t lowest_seq = 0xFFFFFFFF;
+  int newest_sector = -1;
+  int oldest_sector = -1;
+  SectorHeader header;
+
+  for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++) {
+    fcb_read_sector_header(i, &header);
+
+    /* Validate header integrity */
+    if (header.magic != SECTOR_MAGIC) {
+      continue;
+    }
+
+    uint32_t calculated_crc = crc32_gen(&header, 8);
+    if (calculated_crc != header.header_crc) {
+      continue;
+    }
+
+    /* Skip erased sectors */
+    if (header.state == STATE_FRESH) {
+      continue;
+    }
+
+    /* Track the newest sector (highest sequence ID) */
+    if (newest_sector == -1 || SEQ_IS_NEWER(header.sequence_id, highest_seq)) {
+      highest_seq = header.sequence_id;
+      newest_sector = (int)i;
+    }
+
+    /* Track the oldest sector (lowest sequence ID) */
+    if (oldest_sector == -1 || SEQ_IS_OLDER(header.sequence_id, lowest_seq)) {
+      lowest_seq = header.sequence_id;
+      oldest_sector = (int)i;
+    }
+  }
+
+  if (newest_sector == -1) {
+    /* No active sectors found, start with the first sector */
+    fcb->current_sector_id = 0;
+    fcb->write_addr =
+        fcb->first_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+    fcb->read_addr = fcb->write_addr;
+    fcb->delete_addr = fcb->write_addr;
+
+    return 0;
+  }
+
+  fcb->current_sector_id = highest_seq;
+
+  /* Initialize tracking addresses */
+  /* For now, we assume the data follows the header. */
+  fcb->write_addr =
+      (uint32_t)newest_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  fcb->read_addr =
+      (uint32_t)oldest_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  fcb->delete_addr = fcb->read_addr;
+
+  return 0;
+}
+
+/**
+ * @brief Erase all sectors associated with the FCB and reset its state.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_erase(Fcb *fcb) {
+  if (fcb == NULL) {
+    return -1;
+  }
+
+  /* Reset internally tracked sector state */
+  fcb->current_sector_id = 0;
+
+  /* Erase all sectors in the FCB range */
+  for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++) {
+    flash_erase_sector(i * FLASH_SECTOR_SIZE);
+  }
+
+  /* Re-initialize tracking addresses to the start of the first sector */
+  fcb->write_addr =
+      fcb->first_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  fcb->read_addr = fcb->write_addr;
+  fcb->delete_addr = fcb->write_addr;
+
+  return 0;
+}
