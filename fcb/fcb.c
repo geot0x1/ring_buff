@@ -64,6 +64,8 @@ _Static_assert(sizeof(SectorHeader) == 16, "SectorHeader must be 16 bytes");
 static uint32_t fcb_get_sector_status(uint32_t sector_num,
                                       SectorHeader *header);
 static void fcb_append_sector(Fcb *fcb, uint32_t sector_num);
+static void fcb_find_head_tail(Fcb *fcb, int *head_out, int *tail_out,
+                               uint32_t *highest_seq_out);
 
 /*============================================================================
  * Constants
@@ -218,16 +220,15 @@ static void fcb_append_sector(Fcb *fcb, uint32_t sector_num) {
 }
 
 /**
- * @brief Initialize the FCB by scanning the flash sectors.
+ * @brief Scan the FCB sectors to find the newest and oldest sectors.
  *
  * @param fcb Pointer to the FCB logistics structure.
- * @return int 0 on success, non-zero error code otherwise.
+ * @param head_out Pointer to store the index of the newest sector.
+ * @param tail_out Pointer to store the index of the oldest sector.
+ * @param highest_seq_out Pointer to store the highest sequence ID found.
  */
-int fcb_mount(Fcb *fcb) {
-  if (fcb == NULL) {
-    return -1;
-  }
-
+static void fcb_find_head_tail(Fcb *fcb, int *head_out, int *tail_out,
+                               uint32_t *highest_seq_out) {
   uint32_t highest_seq = 0;
   uint32_t lowest_seq = 0xFFFFFFFF;
   int head = -1;
@@ -243,7 +244,6 @@ int fcb_mount(Fcb *fcb) {
     }
 
     /* Track the newest sector (highest sequence ID) */
-    /* Track the newest sector (highest sequence ID) */
     if (head == -1 || SEQ_IS_NEWER(header.sequence_id, highest_seq)) {
       highest_seq = header.sequence_id;
       head = (int)i;
@@ -255,6 +255,28 @@ int fcb_mount(Fcb *fcb) {
       tail = (int)i;
     }
   }
+
+  *head_out = head;
+  *tail_out = tail;
+  *highest_seq_out = highest_seq;
+}
+
+/**
+ * @brief Initialize the FCB by scanning the flash sectors.
+ *
+ * @param fcb Pointer to the FCB logistics structure.
+ * @return int 0 on success, non-zero error code otherwise.
+ */
+int fcb_mount(Fcb *fcb) {
+  if (fcb == NULL) {
+    return -1;
+  }
+
+  uint32_t highest_seq;
+  int head;
+  int tail;
+
+  fcb_find_head_tail(fcb, &head, &tail, &highest_seq);
 
   if (head == -1) {
     /* No active sectors found, start with the first sector */
