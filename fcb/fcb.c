@@ -13,55 +13,6 @@
 #include <string.h>
 
 /*============================================================================
- * Private Function Prototypes
- *============================================================================*/
-
-static uint32_t fcb_read_header_status(uint32_t sector_num);
-static void fcb_append_sector(Fcb *fcb, uint32_t sector_num);
-
-/*============================================================================
- * Constants
- *============================================================================*/
-
-/**
- * @brief Sector magic number for identification
- */
-#define SECTOR_MAGIC 0xCAFEBABE
-
-/**
- * @brief Sector State Machine
- *
- * NOR flash bits can only transition from 1 -> 0 (without erase).
- * The state values are designed so each transition only clears bits:
- *
- *   FRESH (erased) -> ALLOCATED (writing) -> CONSUMED (garbage)
- *   0xFFFFFFFF     -> 0x7FFFFFFF          -> 0x0FFFFFFF
- */
-#define STATE_FRESH 0xFFFFFFFF /**< Erased sector, ready for use */
-#define STATE_ALLOCATED 0x7FFFFFFF /**< Write in progress */
-#define STATE_CONSUMED 0x0FFFFFFF /**< Garbage, ready for erase */
-
-/*============================================================================
- * Sequence ID Rollover-Safe Comparison Macros
- *============================================================================*/
-
-/**
- * @brief Serial Number Arithmetic for rollover-safe sequence comparison
- *
- * These macros use signed integer casting to correctly handle the case
- * when sequence_id (uint32_t) wraps around from 0xFFFFFFFF to 0x00000000.
- *
- * The logic relies on the property that for two sequence numbers a and b:
- * - If (int32_t)(a - b) > 0, then a is "newer" than b
- * - If (int32_t)(a - b) < 0, then a is "older" than b
- *
- * This works correctly as long as the difference between any two active
- * sequence IDs is less than 2^31 (half the uint32_t range).
- */
-#define SEQ_IS_NEWER(a, b) ((int32_t)((uint32_t)(a) - (uint32_t)(b)) > 0)
-#define SEQ_IS_OLDER(a, b) ((int32_t)((uint32_t)(a) - (uint32_t)(b)) < 0)
-
-/*============================================================================
  * Structures
  *============================================================================*/
 
@@ -90,6 +41,57 @@ typedef struct __attribute__((aligned(4))) {
 
 /* Static assertion to verify struct size is exactly 16 bytes */
 _Static_assert(sizeof(SectorHeader) == 16, "SectorHeader must be 16 bytes");
+
+/*============================================================================
+ * Private Function Prototypes
+ *============================================================================*/
+
+static uint32_t fcb_get_sector_status(uint32_t sector_num,
+                                      SectorHeader *header);
+static void fcb_append_sector(Fcb *fcb, uint32_t sector_num);
+
+/*============================================================================
+ * Constants
+ *============================================================================*/
+
+/**
+ * @brief Sector magic number for identification
+ */
+#define SECTOR_MAGIC 0xCAFEBABE
+
+/**
+ * @brief Sector State Machine
+ *
+ * NOR flash bits can only transition from 1 -> 0 (without erase).
+ * The state values are designed so each transition only clears bits:
+ *
+ *   FRESH (erased) -> ALLOCATED (writing) -> CONSUMED (garbage)
+ *   0xFFFFFFFF     -> 0x7FFFFFFF          -> 0x0FFFFFFF
+ */
+#define STATE_FRESH 0xFFFFFFFF /**< Erased sector, ready for use */
+#define STATE_ALLOCATED 0x7FFFFFFF /**< Write in progress */
+#define STATE_CONSUMED 0x0FFFFFFF /**< Garbage, ready for erase */
+#define STATE_INVALID 0x00000000 /**< Invalid sector header */
+
+/*============================================================================
+ * Sequence ID Rollover-Safe Comparison Macros
+ *============================================================================*/
+
+/**
+ * @brief Serial Number Arithmetic for rollover-safe sequence comparison
+ *
+ * These macros use signed integer casting to correctly handle the case
+ * when sequence_id (uint32_t) wraps around from 0xFFFFFFFF to 0x00000000.
+ *
+ * The logic relies on the property that for two sequence numbers a and b:
+ * - If (int32_t)(a - b) > 0, then a is "newer" than b
+ * - If (int32_t)(a - b) < 0, then a is "older" than b
+ *
+ * This works correctly as long as the difference between any two active
+ * sequence IDs is less than 2^31 (half the uint32_t range).
+ */
+#define SEQ_IS_NEWER(a, b) ((int32_t)((uint32_t)(a) - (uint32_t)(b)) > 0)
+#define SEQ_IS_OLDER(a, b) ((int32_t)((uint32_t)(a) - (uint32_t)(b)) < 0)
 
 /*============================================================================
  * Public Functions
@@ -130,21 +132,32 @@ void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header) {
 }
 
 /**
- * @brief Read the status field from a sector header.
+ * @brief Read and validate a sector header status.
  *
  * @param sector_num The index of the sector (0 to FLASH_SECTOR_COUNT - 1).
- * @return uint32_t The state value from the header.
+ * @param header Pointer to the SectorHeader structure to be populated.
+ * @return uint32_t The state value from the header if valid, otherwise
+ * STATE_INVALID.
  */
-static uint32_t fcb_read_header_status(uint32_t sector_num) {
-  SectorHeader header;
-
-  if (sector_num >= FLASH_SECTOR_COUNT) {
-    return STATE_CONSUMED; /* Return a safe default or specific error state */
+static uint32_t fcb_get_sector_status(uint32_t sector_num,
+                                      SectorHeader *header) {
+  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL) {
+    return STATE_INVALID;
   }
 
-  fcb_read_sector_header(sector_num, &header);
+  fcb_read_sector_header(sector_num, header);
 
-  return header.state;
+  /* Validate header integrity */
+  if (header->magic != SECTOR_MAGIC) {
+    return STATE_INVALID;
+  }
+
+  uint32_t calculated_crc = crc32_gen(header, 8);
+  if (calculated_crc != header->header_crc) {
+    return STATE_INVALID;
+  }
+
+  return header->state;
 }
 
 /**
@@ -192,20 +205,10 @@ int fcb_mount(Fcb *fcb) {
   SectorHeader header;
 
   for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++) {
-    fcb_read_sector_header(i, &header);
+    uint32_t state = fcb_get_sector_status(i, &header);
 
-    /* Validate header integrity */
-    if (header.magic != SECTOR_MAGIC) {
-      continue;
-    }
-
-    uint32_t calculated_crc = crc32_gen(&header, 8);
-    if (calculated_crc != header.header_crc) {
-      continue;
-    }
-
-    /* Skip erased sectors */
-    if (header.state == STATE_FRESH) {
+    /* Skip invalid or erased sectors */
+    if (state == STATE_INVALID || state == STATE_FRESH) {
       continue;
     }
 
