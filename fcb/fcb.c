@@ -6,6 +6,7 @@
  * for a NOR flash circular buffer system.
  */
 
+#include "flash_mem.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -80,3 +81,24 @@ typedef struct __attribute__((aligned(4))) {
 
 /* Static assertion to verify struct size is exactly 16 bytes */
 _Static_assert(sizeof(SectorHeader) == 16, "SectorHeader must be 16 bytes");
+
+/*============================================================================
+ * Public Functions
+ *============================================================================*/
+
+/**
+ * @brief Write a sector header to the beginning of a flat sector.
+ *
+ * @param sector_num The index of the sector (0 to FLASH_SECTOR_COUNT - 1).
+ * @param header Pointer to the SectorHeader structure to be written.
+ */
+void fcb_write_sector_header(uint32_t sector_num, SectorHeader *header) {
+  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL) {
+    return;
+  }
+
+  uint32_t sector_addr = sector_num * FLASH_SECTOR_SIZE;
+
+  /* Write the header to the very beginning of the sector */
+  flash_write(sector_addr, header, sizeof(SectorHeader));
+}
