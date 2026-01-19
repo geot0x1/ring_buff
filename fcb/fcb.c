@@ -66,6 +66,9 @@ static uint32_t fcb_get_sector_status(uint32_t sector_num,
 static void fcb_append_sector(Fcb *fcb, uint32_t sector_num);
 static void fcb_find_head_tail(Fcb *fcb, int *head_out, int *tail_out,
                                uint32_t *highest_seq_out);
+static uint32_t fcb_find_sector_end(uint32_t sector_num);
+static int fcb_sector_is_empty(uint32_t sector_num);
+static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out);
 
 /*============================================================================
  * Constants
@@ -262,6 +265,99 @@ static void fcb_find_head_tail(Fcb *fcb, int *head_out, int *tail_out,
 }
 
 /**
+ * @brief Read an FCB item (header and optionally data) from a specific address.
+ *
+ * @param addr The absolute flash address to read from.
+ * @param key_out Pointer to store the read ItemKey.
+ * @return int 0 on success, negative error code otherwise.
+ */
+static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out) {
+  if (key_out == NULL) {
+    return -1;
+  }
+
+  /* Read the item header */
+  flash_read(addr, key_out, sizeof(struct ItemKey));
+
+  /* Validate the header */
+  if (key_out->magic != FCB_ENTRY_MAGIC) {
+    return -2;
+  }
+
+  if (key_out->status == FCB_STATUS_ERASED) {
+    return -3;
+  }
+
+  return 0;
+}
+
+/**
+ * @brief Check if a sector contains any valid data items.
+ *
+ * @param sector_num The index of the sector to check.
+ * @return int 1 if empty, 0 otherwise.
+ */
+static int fcb_sector_is_empty(uint32_t sector_num) {
+  SectorHeader header;
+  uint32_t state = fcb_get_sector_status(sector_num, &header);
+
+  /* If header is invalid or sector is fresh (all FF), it's empty */
+  if (state == STATE_INVALID || state == STATE_FRESH) {
+    return 1;
+  }
+
+  uint32_t data_addr = sector_num * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  struct ItemKey key;
+
+  /* Header is valid, now check the first item's magic */
+  fcb_read_item_at(data_addr, &key);
+
+  /* If the first item's magic is 0xFFFF, no items have been written yet */
+  if (key.magic == 0xFFFF) {
+    return 1;
+  }
+
+  /* Valid header and at least one valid item magic (or at least not FF) */
+  return 0;
+}
+
+/**
+ * @brief Find the next available write position in a sector.
+ *
+ * Scans all items in the sector from the header onwards to find the first
+ * erased/invalid item key.
+ *
+ * @param sector_num The index of the sector to scan.
+ * @return uint32_t The next sector-relative write offset, or 0xFFFFFFFF if no
+ * valid items are found.
+ */
+static uint32_t fcb_find_sector_end(uint32_t sector_num) {
+  if (fcb_sector_is_empty(sector_num)) {
+    return 0xFFFFFFFF;
+  }
+
+  uint32_t sector_addr = sector_num * FLASH_SECTOR_SIZE;
+  uint32_t offset = sizeof(SectorHeader);
+  struct ItemKey key;
+  int found = 0;
+
+  while (offset + sizeof(struct ItemKey) <= FLASH_SECTOR_SIZE) {
+    fcb_read_item_at(sector_addr + offset, &key);
+
+    /* Check if this is a valid item or an erased area */
+    if (key.magic != FCB_ENTRY_MAGIC || key.status == FCB_STATUS_ERASED) {
+      break;
+    }
+
+    /* Valid item found, skip to the next potential item */
+    found = 1;
+    offset += sizeof(struct ItemKey) + key.len;
+  }
+
+  return found ? offset : 0xFFFFFFFF;
+}
+
+/**
  * @brief Initialize the FCB by scanning the flash sectors.
  *
  * @param fcb Pointer to the FCB logistics structure.
@@ -292,8 +388,17 @@ int fcb_mount(Fcb *fcb) {
   fcb->current_sector_id = highest_seq;
 
   /* Initialize tracking addresses */
-  /* For now, we assume the data follows the header. */
-  fcb->write_addr = (uint32_t)head * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  /* Find the next write position in the head sector */
+  uint32_t sector_offset = fcb_find_sector_end((uint32_t)head);
+  if (sector_offset == 0xFFFFFFFF) {
+    /* No items found, start after the sector header */
+    fcb->write_addr = (uint32_t)head * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
+  } else {
+    /* Continue from the found offset */
+    fcb->write_addr = (uint32_t)head * FLASH_SECTOR_SIZE + sector_offset;
+  }
+
+  /* Start reading from the beginning of the oldest sector */
   fcb->read_addr = (uint32_t)tail * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
   fcb->delete_addr = fcb->read_addr;
 

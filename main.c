@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-
 Fcb fcb = {
     .first_sector = 0, .last_sector = 63, .sector_size = FLASH_SECTOR_SIZE};
 
@@ -22,10 +21,24 @@ int main() {
   }
 
   printf("FCB mounted successfully!\n");
-  printf("Current Sector ID: %u\n", fcb.current_sector_id);
-  printf("Write Addr:  0x%08X\n", fcb.write_addr);
-  printf("Read Addr:   0x%08X\n", fcb.read_addr);
-  printf("Delete Addr: 0x%08X\n", fcb.delete_addr);
+  printf("Initial State:\n");
+  printf("  Current Sector ID: %u\n", fcb.current_sector_id);
+  printf("  Write Addr:  0x%08X\n", fcb.write_addr);
+
+  const char *test_msg = "Hello FCB! This is a test message.";
+  printf("Appending: \"%s\"\n", test_msg);
+
+  rc = fcb_append(&fcb, test_msg, (uint16_t)strlen(test_msg));
+  if (rc == 0) {
+    printf("Append success!\n");
+  } else {
+    printf("Append failed with code %d\n", rc);
+  }
+
+  printf("Updated State:\n");
+  printf("  Current Sector ID: %u\n", fcb.current_sector_id);
+  printf("  Write Addr:  0x%08X\n", fcb.write_addr);
+  printf("  Read Addr:   0x%08X\n", fcb.read_addr);
 
   return 0;
 }
