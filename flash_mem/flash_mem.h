@@ -43,6 +43,6 @@ void flash_full_erase(void);
  * 
  * @param addr Any address within the sector to print.
  */
-void flash_print_sector(uint32_t addr);
+void flash_print_sector(uint32_t addr, uint32_t num_bytes);
 
 #endif // FLASH_MEM_H

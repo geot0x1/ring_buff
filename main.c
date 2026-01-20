@@ -50,6 +50,8 @@ int main() {
     printf("  Read Addr:   0x%08X\n", fcb.read_addr);
   }
 
+  flash_print_sector(0, 256);
+
   return 0;
 }
 

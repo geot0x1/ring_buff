@@ -40,17 +40,24 @@ void flash_full_erase(void)
     memset(fcb_flash, 0xFF, FLASH_SIZE);
 }
 
-void flash_print_sector(uint32_t addr)
+void flash_print_sector(uint32_t addr, uint32_t num_bytes)
 {
     uint32_t base_addr = addr - (addr % FLASH_SECTOR_SIZE);
     
-    printf("--- Sector at 0x%08X ---\n", base_addr);
-    for (uint32_t i = 0; i < FLASH_SECTOR_SIZE; i += 16)
+    printf("--- Sector at 0x%08X (printing %u bytes) ---\n", base_addr, num_bytes);
+    for (uint32_t i = 0; i < num_bytes; i += 16)
     {
         printf("%08X: ", base_addr + i);
         for (uint32_t j = 0; j < 16; j++)
         {
-            printf("%02X ", fcb_flash[base_addr + i + j]);
+            if (i + j < num_bytes)
+            {
+                printf("%02X ", fcb_flash[base_addr + i + j]);
+            }
+            else
+            {
+                printf("   ");
+            }
         }
         printf("\n");
     }
