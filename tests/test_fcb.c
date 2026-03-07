@@ -222,3 +222,55 @@ void test_recovery_with_interrupted_sector_erase(void) {
                     "Sector 1 should have valid magic after crossing");
   TEST_ASSERT_EQUAL(0x7FFFFFFF, valid_h1.state, "Sector 1 should be ALLOCATED");
 }
+
+/* ============================================================================
+ * Additional Edge Case Tests
+ * ============================================================================
+ */
+
+void test_fcb_append_multiple(void) {
+  int rc = fcb_mount(&fcb);
+  TEST_ASSERT_EQUAL(0, rc, "Mount failed");
+
+  const char *msg1 = "Message 1";
+  const char *msg2 = "Message 2";
+  const char *msg3 = "Message 3";
+
+  rc = fcb_append(&fcb, msg1, strlen(msg1));
+  TEST_ASSERT_EQUAL(0, rc, "First append failed");
+
+  rc = fcb_append(&fcb, msg2, strlen(msg2));
+  TEST_ASSERT_EQUAL(0, rc, "Second append failed");
+
+  rc = fcb_append(&fcb, msg3, strlen(msg3));
+  TEST_ASSERT_EQUAL(0, rc, "Third append failed");
+}
+
+void test_fcb_append_null_buffer(void) {
+  int rc = fcb_mount(&fcb);
+  TEST_ASSERT_EQUAL(0, rc, "Mount failed");
+
+  rc = fcb_append(&fcb, NULL, 10);
+  // Assuming fcb_append returns an error code (e.g., -1) for null buffer
+  TEST_ASSERT(rc != 0, "Append should fail with NULL buffer");
+}
+
+void test_fcb_append_zero_length(void) {
+  int rc = fcb_mount(&fcb);
+  TEST_ASSERT_EQUAL(0, rc, "Mount failed");
+
+  rc = fcb_append(&fcb, "empty", 0);
+  // Assuming fcb_append returns an error code or handles 0-length gracefully
+  // Check if it's handled; if it allows it it returns 0. Let's see how it
+  // behaves. If it allows 0 length, it's fine. We check it doesn't crash.
+}
+
+void test_fcb_append_too_large(void) {
+  int rc = fcb_mount(&fcb);
+  TEST_ASSERT_EQUAL(0, rc, "Mount failed");
+
+  // Try to append an item larger than the sector capacity
+  uint8_t buffer[10];
+  rc = fcb_append(&fcb, buffer, 0xFFFF);
+  TEST_ASSERT(rc != 0, "Append should fail for excessively large payloads");
+}

@@ -556,6 +556,11 @@ int fcb_append(Fcb *fcb, const void *data, uint16_t len) {
 
   uint32_t item_size = sizeof(struct ItemKey) + len;
 
+  /* Reject items that are fundamentally too large to fit in any sector */
+  if (item_size > (FLASH_SECTOR_SIZE - sizeof(SectorHeader))) {
+    return -1;
+  }
+
   /* Check if current sector has room for the item */
   uint32_t current_sector_num = fcb->write_addr / FLASH_SECTOR_SIZE;
   uint32_t offset_in_sector = fcb->write_addr % FLASH_SECTOR_SIZE;
