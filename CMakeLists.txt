@@ -26,3 +26,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE fcb flash_mem crc32)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -O2)
 endif()
+
+# Enable testing
+enable_testing()
+add_subdirectory(tests)

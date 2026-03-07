@@ -32,8 +32,7 @@
  *
  * @note Structure is naturally aligned to 16 bytes (4 x uint32_t = 16 bytes).
  */
-typedef struct __attribute__((aligned(4)))
-{
+typedef struct __attribute__((aligned(4))) {
   uint32_t magic;       /**< Magic number (SECTOR_MAGIC = 0xCAFEBABE) */
   uint32_t sequence_id; /**< Monotonic counter for sector ordering */
   uint32_t header_crc;  /**< CRC32 of magic + sequence_id (8 bytes) */
@@ -45,8 +44,7 @@ typedef struct __attribute__((aligned(4)))
  * Total Size: 12 Bytes (4-byte aligned)
  * ============================================================================
  */
-struct ItemKey
-{
+struct ItemKey {
   uint16_t magic;  // Sync marker (e.g., 0xA55A)
   uint16_t len;    // Length of the following data payload
   uint32_t crc;    // CRC32 of the Data payload (and maybe len)
@@ -92,10 +90,10 @@ static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out);
  *   FRESH (erased) -> ALLOCATED (writing) -> CONSUMED (garbage)
  *   0xFFFFFFFF     -> 0x7FFFFFFF          -> 0x0FFFFFFF
  */
-#define STATE_FRESH 0xFFFFFFFF /**< Erased sector, ready for use */
+#define STATE_FRESH 0xFFFFFFFF     /**< Erased sector, ready for use */
 #define STATE_ALLOCATED 0x7FFFFFFF /**< Write in progress */
-#define STATE_CONSUMED 0x0FFFFFFF /**< Garbage, ready for erase */
-#define STATE_INVALID 0x00000000 /**< Invalid sector header */
+#define STATE_CONSUMED 0x0FFFFFFF  /**< Garbage, ready for erase */
+#define STATE_INVALID 0x00000000   /**< Invalid sector header */
 
 /* ============================================================================
  * Entry Constants
@@ -142,10 +140,8 @@ static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out);
  * @param sector_num The index of the sector (0 to FLASH_SECTOR_COUNT - 1).
  * @param header Pointer to the SectorHeader structure to be written.
  */
-void fcb_write_sector_header(uint32_t sector_num, SectorHeader *header)
-{
-  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL)
-  {
+void fcb_write_sector_header(uint32_t sector_num, SectorHeader *header) {
+  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL) {
     return;
   }
 
@@ -161,10 +157,8 @@ void fcb_write_sector_header(uint32_t sector_num, SectorHeader *header)
  * @param sector_num The index of the sector (0 to FLASH_SECTOR_COUNT - 1).
  * @param header Pointer to the SectorHeader structure to be populated.
  */
-void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header)
-{
-  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL)
-  {
+void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header) {
+  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL) {
     return;
   }
 
@@ -183,24 +177,20 @@ void fcb_read_sector_header(uint32_t sector_num, SectorHeader *header)
  * STATE_INVALID.
  */
 static uint32_t fcb_get_sector_status(uint32_t sector_num,
-                                      SectorHeader *header)
-{
-  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL)
-  {
+                                      SectorHeader *header) {
+  if (sector_num >= FLASH_SECTOR_COUNT || header == NULL) {
     return STATE_INVALID;
   }
 
   fcb_read_sector_header(sector_num, header);
 
   /* Validate header integrity */
-  if (header->magic != SECTOR_MAGIC)
-  {
+  if (header->magic != SECTOR_MAGIC) {
     return STATE_INVALID;
   }
 
   uint32_t calculated_crc = crc32_gen(header, 8);
-  if (calculated_crc != header->header_crc)
-  {
+  if (calculated_crc != header->header_crc) {
     return STATE_INVALID;
   }
 
@@ -213,10 +203,8 @@ static uint32_t fcb_get_sector_status(uint32_t sector_num,
  * @param fcb Pointer to the FCB logistics structure.
  * @param sector_num The index of the sector to be reserved.
  */
-static void fcb_append_sector(Fcb *fcb, uint32_t sector_num)
-{
-  if (fcb == NULL || sector_num >= FLASH_SECTOR_COUNT)
-  {
+static void fcb_append_sector(Fcb *fcb, uint32_t sector_num) {
+  if (fcb == NULL || sector_num >= FLASH_SECTOR_COUNT) {
     return;
   }
 
@@ -245,34 +233,29 @@ static void fcb_append_sector(Fcb *fcb, uint32_t sector_num)
  * @param highest_seq_out Pointer to store the highest sequence ID found.
  */
 static void fcb_find_head_tail(Fcb *fcb, int *head_out, int *tail_out,
-                               uint32_t *highest_seq_out)
-{
+                               uint32_t *highest_seq_out) {
   uint32_t highest_seq = 0;
   uint32_t lowest_seq = 0xFFFFFFFF;
   int head = -1;
   int tail = -1;
   SectorHeader header;
 
-  for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++)
-  {
+  for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++) {
     uint32_t state = fcb_get_sector_status(i, &header);
 
     /* Skip invalid or erased sectors */
-    if (state == STATE_INVALID || state == STATE_FRESH)
-    {
+    if (state == STATE_INVALID || state == STATE_FRESH) {
       continue;
     }
 
     /* Track the newest sector (highest sequence ID) */
-    if (head == -1 || SEQ_IS_NEWER(header.sequence_id, highest_seq))
-    {
+    if (head == -1 || SEQ_IS_NEWER(header.sequence_id, highest_seq)) {
       highest_seq = header.sequence_id;
       head = (int)i;
     }
 
     /* Track the oldest sector (lowest sequence ID) */
-    if (tail == -1 || SEQ_IS_OLDER(header.sequence_id, lowest_seq))
-    {
+    if (tail == -1 || SEQ_IS_OLDER(header.sequence_id, lowest_seq)) {
       lowest_seq = header.sequence_id;
       tail = (int)i;
     }
@@ -290,10 +273,8 @@ static void fcb_find_head_tail(Fcb *fcb, int *head_out, int *tail_out,
  * @param key_out Pointer to store the read ItemKey.
  * @return int 0 on success, negative error code otherwise.
  */
-static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out)
-{
-  if (key_out == NULL)
-  {
+static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out) {
+  if (key_out == NULL) {
     return -1;
   }
 
@@ -301,13 +282,11 @@ static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out)
   flash_read(addr, key_out, sizeof(struct ItemKey));
 
   /* Validate the header */
-  if (key_out->magic != FCB_ENTRY_MAGIC)
-  {
+  if (key_out->magic != FCB_ENTRY_MAGIC) {
     return -2;
   }
 
-  if (key_out->status == FCB_STATUS_ERASED)
-  {
+  if (key_out->status == FCB_STATUS_ERASED) {
     return -3;
   }
 
@@ -320,14 +299,12 @@ static int fcb_read_item_at(uint32_t addr, struct ItemKey *key_out)
  * @param sector_num The index of the sector to check.
  * @return int 1 if empty, 0 otherwise.
  */
-static int fcb_sector_is_empty(uint32_t sector_num)
-{
+static int fcb_sector_is_empty(uint32_t sector_num) {
   SectorHeader header;
   uint32_t state = fcb_get_sector_status(sector_num, &header);
 
   /* If header is invalid or sector is fresh (all FF), it's empty */
-  if (state == STATE_INVALID || state == STATE_FRESH)
-  {
+  if (state == STATE_INVALID || state == STATE_FRESH) {
     return 1;
   }
 
@@ -338,8 +315,7 @@ static int fcb_sector_is_empty(uint32_t sector_num)
   fcb_read_item_at(data_addr, &key);
 
   /* If the first item's magic is 0xFFFF, no items have been written yet */
-  if (key.magic == 0xFFFF)
-  {
+  if (key.magic == 0xFFFF) {
     return 1;
   }
 
@@ -356,50 +332,41 @@ static int fcb_sector_is_empty(uint32_t sector_num)
  * @return uint32_t The next sector-relative write offset, or 0xFFFFFFFF if
  * full.
  */
-static uint32_t fcb_find_sector_head_offset(uint32_t sector_num)
-{
+static uint32_t fcb_find_sector_head_offset(uint32_t sector_num) {
   uint32_t sector_addr = sector_num * FLASH_SECTOR_SIZE;
   uint32_t offset = sizeof(SectorHeader);
   uint32_t threshold = 2 * sizeof(struct ItemKey);
 
-  while (offset + threshold <= FLASH_SECTOR_SIZE)
-  {
+  while (offset + threshold <= FLASH_SECTOR_SIZE) {
     uint32_t word;
     flash_read(sector_addr + offset, &word, sizeof(word));
 
-    if (word == 0xFFFFFFFF)
-    {
+    if (word == 0xFFFFFFFF) {
       /* Potential head candidates found, check if there's enough FF space */
       int is_ff = 1;
-      for (uint32_t i = 1; i < threshold / 4; i++)
-      {
+      for (uint32_t i = 1; i < threshold / 4; i++) {
         uint32_t next_word;
         flash_read(sector_addr + offset + (i * 4), &next_word,
                    sizeof(next_word));
-        if (next_word != 0xFFFFFFFF)
-        {
+        if (next_word != 0xFFFFFFFF) {
           is_ff = 0;
           break;
         }
       }
 
-      if (is_ff)
-      {
+      if (is_ff) {
         return offset;
       }
 
-      /* Advance by 1 byte since we found a non-FF word or it's not a full FF block */
+      /* Advance by 1 byte since we found a non-FF word or it's not a full FF
+       * block */
       offset += 1;
-    }
-    else
-    {
+    } else {
       struct ItemKey key;
-      if (fcb_read_item_at(sector_addr + offset, &key) == 0)
-      {
+      if (fcb_read_item_at(sector_addr + offset, &key) == 0) {
         /* Valid item, skip it */
         offset += sizeof(struct ItemKey) + key.len;
-      } else
-      {
+      } else {
         /* Corrupted or non-FF data, jump to next byte */
         offset += 1;
       }
@@ -416,24 +383,20 @@ static uint32_t fcb_find_sector_head_offset(uint32_t sector_num)
  * @return uint32_t The sector-relative offset of the first valid item, or
  * 0xFFFFFFFF if none.
  */
-static uint32_t fcb_find_sector_tail_offset(uint32_t sector_num)
-{
+static uint32_t fcb_find_sector_tail_offset(uint32_t sector_num) {
   uint32_t sector_addr = sector_num * FLASH_SECTOR_SIZE;
   uint32_t offset = sizeof(SectorHeader);
   struct ItemKey key;
 
-  while (offset + sizeof(struct ItemKey) <= FLASH_SECTOR_SIZE)
-  {
-    if (fcb_read_item_at(sector_addr + offset, &key) == 0)
-    {
+  while (offset + sizeof(struct ItemKey) <= FLASH_SECTOR_SIZE) {
+    if (fcb_read_item_at(sector_addr + offset, &key) == 0) {
       return offset;
     }
 
     /* Check if we hit FF area - if so, no point continuing */
     uint32_t word;
     flash_read(sector_addr + offset, &word, sizeof(word));
-    if (word == 0xFFFFFFFF)
-    {
+    if (word == 0xFFFFFFFF) {
       break;
     }
 
@@ -453,8 +416,7 @@ static uint32_t fcb_find_sector_tail_offset(uint32_t sector_num)
  * @return uint32_t The absolute address of the tail, or head_addr if no valid
  * items found.
  */
-static uint32_t fcb_recover_global_tail(Fcb *fcb, uint32_t head_addr)
-{
+static uint32_t fcb_recover_global_tail(Fcb *fcb, uint32_t head_addr) {
   int head_sector = (int)(head_addr / FLASH_SECTOR_SIZE);
   int tail_sector = -1;
   int dummy_head = -1;
@@ -463,8 +425,7 @@ static uint32_t fcb_recover_global_tail(Fcb *fcb, uint32_t head_addr)
   /* Find relative oldest sector */
   fcb_find_head_tail(fcb, &dummy_head, &tail_sector, &highest_seq);
 
-  if (tail_sector == -1)
-  {
+  if (tail_sector == -1) {
     return head_addr;
   }
 
@@ -472,23 +433,19 @@ static uint32_t fcb_recover_global_tail(Fcb *fcb, uint32_t head_addr)
   uint32_t sector_count = fcb->last_sector - fcb->first_sector + 1;
   uint32_t i = (uint32_t)tail_sector;
 
-  for (uint32_t count = 0; count < sector_count; count++)
-  {
+  for (uint32_t count = 0; count < sector_count; count++) {
     uint32_t offset = fcb_find_sector_tail_offset(i);
-    if (offset != 0xFFFFFFFF)
-    {
+    if (offset != 0xFFFFFFFF) {
       return i * FLASH_SECTOR_SIZE + offset;
     }
 
     /* If we reached the head sector and found nothing, stop */
-    if ((int)i == head_sector)
-    {
+    if ((int)i == head_sector) {
       break;
     }
 
     i++;
-    if (i > fcb->last_sector)
-    {
+    if (i > fcb->last_sector) {
       i = fcb->first_sector;
     }
   }
@@ -502,10 +459,8 @@ static uint32_t fcb_recover_global_tail(Fcb *fcb, uint32_t head_addr)
  * @param fcb Pointer to the FCB logistics structure.
  * @return int 0 on success, non-zero error code otherwise.
  */
-int fcb_mount(Fcb *fcb)
-{
-  if (fcb == NULL)
-  {
+int fcb_mount(Fcb *fcb) {
+  if (fcb == NULL) {
     return -1;
   }
 
@@ -515,10 +470,12 @@ int fcb_mount(Fcb *fcb)
 
   fcb_find_head_tail(fcb, &head_sector, &tail_sector, &highest_seq);
 
-  if (head_sector == -1)
-  {
+  if (head_sector == -1) {
     /* No active sectors found, start with the first sector */
+    flash_erase_sector(fcb->first_sector * FLASH_SECTOR_SIZE);
     fcb->current_sector_id = 0;
+    fcb_append_sector(fcb, fcb->first_sector);
+
     fcb->write_addr =
         fcb->first_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
     fcb->read_addr = fcb->write_addr;
@@ -532,12 +489,10 @@ int fcb_mount(Fcb *fcb)
   /* Recover head position in the newer sector */
   uint32_t head_offset = fcb_find_sector_head_offset((uint32_t)head_sector);
 
-  if (head_offset == 0xFFFFFFFF)
-  {
+  if (head_offset == 0xFFFFFFFF) {
     /* No FF space left in the newer sector, move to the next sector */
     uint32_t next_sector = (uint32_t)head_sector + 1;
-    if (next_sector > fcb->last_sector)
-    {
+    if (next_sector > fcb->last_sector) {
       next_sector = fcb->first_sector;
     }
 
@@ -545,8 +500,7 @@ int fcb_mount(Fcb *fcb)
     flash_erase_sector(next_sector * FLASH_SECTOR_SIZE);
     fcb_append_sector(fcb, next_sector);
     fcb->write_addr = next_sector * FLASH_SECTOR_SIZE + sizeof(SectorHeader);
-  } else
-  {
+  } else {
     fcb->write_addr = (uint32_t)head_sector * FLASH_SECTOR_SIZE + head_offset;
   }
 
@@ -563,10 +517,8 @@ int fcb_mount(Fcb *fcb)
  * @param fcb Pointer to the FCB logistics structure.
  * @return int 0 on success, non-zero error code otherwise.
  */
-int fcb_erase(Fcb *fcb)
-{
-  if (fcb == NULL)
-  {
+int fcb_erase(Fcb *fcb) {
+  if (fcb == NULL) {
     return -1;
   }
 
@@ -574,10 +526,12 @@ int fcb_erase(Fcb *fcb)
   fcb->current_sector_id = 0;
 
   /* Erase all sectors in the FCB range */
-  for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++)
-  {
+  for (uint32_t i = fcb->first_sector; i <= fcb->last_sector; i++) {
     flash_erase_sector(i * FLASH_SECTOR_SIZE);
   }
+
+  /* Initialize the first sector header to mark it as active */
+  fcb_append_sector(fcb, fcb->first_sector);
 
   /* Re-initialize tracking addresses to the start of the first sector */
   fcb->write_addr =
@@ -595,10 +549,8 @@ int fcb_erase(Fcb *fcb)
  * @param len Length of the data in bytes.
  * @return int 0 on success, non-zero error code otherwise.
  */
-int fcb_append(Fcb *fcb, const void *data, uint16_t len)
-{
-  if (fcb == NULL || data == NULL || len == 0)
-  {
+int fcb_append(Fcb *fcb, const void *data, uint16_t len) {
+  if (fcb == NULL || data == NULL || len == 0) {
     return -1;
   }
 
@@ -608,19 +560,16 @@ int fcb_append(Fcb *fcb, const void *data, uint16_t len)
   uint32_t current_sector_num = fcb->write_addr / FLASH_SECTOR_SIZE;
   uint32_t offset_in_sector = fcb->write_addr % FLASH_SECTOR_SIZE;
 
-  if (offset_in_sector + item_size > FLASH_SECTOR_SIZE)
-  {
+  if (offset_in_sector + item_size > FLASH_SECTOR_SIZE) {
     /* Not enough space in current sector, move to the next one */
     uint32_t next_sector = current_sector_num + 1;
-    if (next_sector > fcb->last_sector)
-    {
+    if (next_sector > fcb->last_sector) {
       next_sector = fcb->first_sector;
     }
 
     /* Check if we are about to overwrite the oldest sector (tail) */
     uint32_t tail_sector = fcb->read_addr / FLASH_SECTOR_SIZE;
-    if (next_sector == tail_sector)
-    {
+    if (next_sector == tail_sector) {
       /* Buffer is full */
       return -2;
     }
