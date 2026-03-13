@@ -1175,8 +1175,8 @@ int fcb_delete(fcb_t *fcb)
         /* Ensure we can read a record header at this position. */
         if (fcb->head_offset + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
         {
-            /* Not enough room for a header in this sector — move to next
-             * valid sector.                                               */
+            /* Not enough room for a header in this sector — try to move to next.
+             * But only if we haven't reached tail already.                       */
             uint8_t ns = next_sector(fcb, fcb->head_sector);
             fcb_sector_hdr_t shdr;
             rc = read_sector_header(fcb, ns, &shdr);
@@ -1187,6 +1187,13 @@ int fcb_delete(fcb_t *fcb)
             }
             fcb->head_sector = ns;
             fcb->head_offset = FCB_SECTOR_HDR_SIZE;
+
+            /* Check again if we've reached tail after moving to next sector. */
+            if (fcb->head_sector == fcb->tail_sector &&
+                fcb->head_offset == fcb->tail_offset)
+            {
+                break;
+            }
         }
 
         hdr_addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
@@ -1269,18 +1276,8 @@ int fcb_discard_oldest_sector(fcb_t *fcb)
     /*  Verify all records in this sector are consumed                  */
     /* -------------------------------------------------------------- */
 
-    /* Don't discard the sector if head is still pointing into it. */
-    if ((uint8_t)oldest_sector == fcb->head_sector)
-    {
-        /* Head is in this sector — check if all records up to head are
-         * consumed.  If head_offset is at the sector header (no unconsumed
-         * records), the sector might be discardable, but the head is
-         * still referencing it.  We only discard if the head has moved
-         * past this sector entirely.                                      */
-        fcb_unlock(fcb);
-        return FCB_NOT_CONSUMED;
-    }
-
+    /* Check if all records in this sector are fully consumed. This check
+     * MUST be performed regardless of whether head is in this sector.     */
     bool fully_consumed = false;
     rc = sector_is_fully_consumed(fcb, (uint8_t)oldest_sector,
                                   fcb->tail_sector, fcb->tail_offset,
@@ -1297,7 +1294,17 @@ int fcb_discard_oldest_sector(fcb_t *fcb)
         return FCB_NOT_CONSUMED;
     }
 
-    /* -------------------------------------------------------------- */
+    /* Head cannot be in this sector if we want to discard it.
+     * The only exception is if the sector has been fully read through
+     * (all records consumed) such that head has advanced beyond tail
+     * within the sector. But practically, if head is in the sector,
+     * it means we're still "reading from" this sector logically.
+     */
+    if ((uint8_t)oldest_sector == fcb->head_sector)
+    {
+        fcb_unlock(fcb);
+        return FCB_NOT_CONSUMED;
+    }
     /*  Erase the sector                                               */
     /*                                                                 */
     /*  After erase, the sector header will be 0xFF (erased status).   */
