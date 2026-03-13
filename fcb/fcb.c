@@ -1343,12 +1343,15 @@ bool fcb_is_full(const fcb_t *fcb)
 
     fcb_lock((fcb_t *)fcb);
 
-    /* A minimal record is header (12) + 1 byte of data = 13 bytes. */
+    /* Check if we have enough space for a maximum-sized record.
+     * This ensures is_full() returns true when write() would fail for
+     * the typical use case (writing large records).
+     */
     uint32_t space = free_space(fcb);
-    bool is_full = (space < FCB_RECORD_HDR_SIZE + 1);
+    uint32_t max_record_needed = FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE;
 
     fcb_unlock((fcb_t *)fcb);
-    return is_full;
+    return (space < max_record_needed);
 }
 
 /* ================================================================== */
