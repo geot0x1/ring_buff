@@ -22,28 +22,31 @@ int flash_write(uint32_t addr, const void *data, uint16_t len) {
   return 0; // Success
 }
 
-void flash_read(uint32_t addr, void *data, uint16_t size) {
+int flash_read(uint32_t addr, void *data, uint16_t size) {
   if (addr + size > FLASH_SIZE) {
-    return; // Simple bounds check
+    return -1; // Out of bounds
   }
   memcpy(data, &fcb_flash[addr], size);
+  return 0; // Success
 }
 
-void flash_erase_sector(uint32_t addr) {
-  // Find the base address of the sector (align to FLASH_SECTOR_SIZE)
-  uint32_t base_addr = addr - (addr % FLASH_SECTOR_SIZE);
+int flash_erase_sector(uint32_t addr) {
+  // Using bitwise masking is more efficient/idiomatic for power-of-2 sizes
+  // Assuming FLASH_SECTOR_SIZE is a power of 2 (e.g., 4096 or 65536)
+  uint32_t base_addr = addr & ~(FLASH_SECTOR_SIZE - 1);
 
   if (base_addr + FLASH_SECTOR_SIZE > FLASH_SIZE) {
-    return; // Simple bounds check
+    return -1; // Out of bounds
   }
-  // Set 64KB (65536 bytes) to 0xFF
+
   memset(&fcb_flash[base_addr], 0xFF, FLASH_SECTOR_SIZE);
+  return 0; // Success
 }
 
 void flash_full_erase(void) { memset(fcb_flash, 0xFF, FLASH_SIZE); }
 
 void flash_print_sector(uint32_t addr, uint32_t num_bytes) {
-  uint32_t base_addr = addr - (addr % FLASH_SECTOR_SIZE);
+  uint32_t base_addr = addr & ~(FLASH_SECTOR_SIZE - 1);
 
   printf("--- Sector at 0x%08X (printing %u bytes) ---\n", base_addr,
          num_bytes);
