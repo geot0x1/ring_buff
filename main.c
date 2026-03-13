@@ -1445,6 +1445,406 @@ void test_write_after_discard_reclaims_space(void)
 }
 
 /* ================================================================== */
+/*  --- Reset recovery with existing data ---                         */
+/* ================================================================== */
+
+void test_reset_recovery_with_unread_records(void)
+{
+    /*
+     * Write multiple records, then reset (re-mount) without deleting them.
+     * After reset, verify all records are still present and readable in FIFO order.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[64];
+    const int record_count = 10;
+    for (int i = 0; i < record_count; i++)
+    {
+        memset(wbuf, (uint8_t)(i + 0x10), sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+    }
+
+    /* Reset: re-mount without flash_init (data persists). */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify all records are still present and in correct order. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    for (int i = 0; i < record_count; i++)
+    {
+        memset(wbuf, (uint8_t)(i + 0x10), sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
+        TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_reset_recovery_with_partially_consumed_data(void)
+{
+    /*
+     * Write 20 records, consume first 5, then reset and verify:
+     * - The 5 consumed records are skipped (head is positioned correctly).
+     * - The remaining 15 records are all readable in order.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[32];
+    const int total_records = 20;
+    const int consumed_count = 5;
+
+    /* Write records 0-19. */
+    for (int i = 0; i < total_records; i++)
+    {
+        memset(wbuf, (uint8_t)(i + 0x20), sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+    }
+
+    /* Consume first 5 records. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    for (int i = 0; i < consumed_count; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    /* Reset: re-mount. */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify first next record is record #5 (not 0-4). */
+    memset(wbuf, (uint8_t)(consumed_count + 0x20), sizeof(wbuf));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
+    TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+
+    /* Verify remaining records 6-19. */
+    for (int i = consumed_count + 1; i < total_records; i++)
+    {
+        memset(wbuf, (uint8_t)(i + 0x20), sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
+        TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_reset_recovery_with_mixed_operations(void)
+{
+    /*
+     * Interleave write and delete operations: write, delete some, write more, reset.
+     * Verify records are correctly recovered after reset.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[16];
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+
+    /* Write 10 records with IDs 0-9. */
+    for (int i = 0; i < 10; i++)
+    {
+        memset(wbuf, (uint8_t)(i + 0x30), sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+    }
+
+    /* Delete first 3 records. */
+    for (int i = 0; i < 3; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    /* Reset. */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify records 3-9 are still present and readable (7 records). */
+    int count = 0;
+    while (fcb_read(&fcb_after_reset, rbuf, &rlen) == FCB_OK)
+    {
+        /* Records should be 0x33-0x39 */
+        TEST_ASSERT_TRUE(rbuf[0] >= 0x33 && rbuf[0] <= 0x39);
+        count++;
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+    TEST_ASSERT_EQUAL_INT(7, count);
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_reset_recovery_with_spanning_records(void)
+{
+    /*
+     * Write enough records to span sector boundaries.
+     * Reset and verify spanning records are correctly recovered.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+    memset(wbuf, 0x7A, sizeof(wbuf));
+
+    /* Write 64 records (64th will span sector 0→1). */
+    for (int i = 0; i < 64; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
+    }
+
+    /* Verify tail crossed into sector 1 before reset. */
+    uint8_t tail_sector_before = fcb.tail_sector;
+    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)tail_sector_before);
+
+    /* Reset. */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify tail position is recovered correctly. */
+    TEST_ASSERT_EQUAL_UINT8(tail_sector_before, fcb_after_reset.tail_sector);
+
+    /* Read and verify all 64 records. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    for (int i = 0; i < 64; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
+        TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_reset_recovery_with_multiple_sectors(void)
+{
+    /*
+     * With a 3-sector config, write records to span multiple sectors,
+     * consume some, then reset. Verify recovery and that buffer can be read after reset.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 3;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+    memset(wbuf, 0x8B, sizeof(wbuf));
+
+    /* Write many records. */
+    int write_count = 0;
+    for (int i = 0; i < 100; i++)
+    {
+        int rc = fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE);
+        if (rc == FCB_OK)
+        {
+            write_count++;
+        }
+        else if (rc == FCB_FULL)
+        {
+            break;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_INT(0, write_count);
+
+    /* Consume some records. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    int consume_count = 0;
+    for (int i = 0; i < 10 && i < write_count; i++)
+    {
+        if (fcb_read(&fcb, rbuf, &rlen) == FCB_OK)
+        {
+            fcb_delete(&fcb);
+            consume_count++;
+        }
+    }
+
+    /* Reset. */
+    fcb_t fcb_after_reset;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 3;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify we can read immediately after reset. */
+    TEST_ASSERT_FALSE(fcb_is_empty(&fcb_after_reset));
+
+    /* Drain all records from the buffer. */
+    int total_read = 0;
+    int delete_errors = 0;
+    while (fcb_read(&fcb_after_reset, rbuf, &rlen) == FCB_OK)
+    {
+        total_read++;
+        if (fcb_delete(&fcb_after_reset) != FCB_OK)
+        {
+            delete_errors++;
+            break;
+        }
+    }
+
+    /* Should not have had any delete errors. */
+    TEST_ASSERT_EQUAL_INT(0, delete_errors);
+    TEST_ASSERT_GREATER_THAN_INT(0, total_read);
+}
+
+void test_reset_recovery_preserves_record_integrity(void)
+{
+    /*
+     * Write records with distinct patterns, reset, then verify
+     * each record's data is exactly preserved (no corruption).
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    const int num_records = 8;
+    uint8_t patterns[8][64] = {0};
+
+    /* Create distinct patterns for each record. */
+    for (int i = 0; i < num_records; i++)
+    {
+        for (int j = 0; j < 64; j++)
+        {
+            patterns[i][j] = (uint8_t)((i * 16 + j) & 0xFF);
+        }
+    }
+
+    /* Write all records with their patterns. */
+    for (int i = 0; i < num_records; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK,
+                              fcb_write(&fcb, patterns[i], sizeof(patterns[i])));
+    }
+
+    /* Reset. */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Read and verify each record matches its original pattern exactly. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    for (int i = 0; i < num_records; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_size_t(sizeof(patterns[i]), rlen);
+        TEST_ASSERT_EQUAL_MEMORY(patterns[i], rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_reset_recovery_after_partial_deletion_sequence(void)
+{
+    /*
+     * Write 10 records, delete 4 of them in a sequence,
+     * reset, then verify remaining records are present.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[16];
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+
+    /* Write 10 records. */
+    for (int i = 0; i < 10; i++)
+    {
+        memset(wbuf, (uint8_t)(i + 0x50), sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+    }
+
+    /* Delete first 4 records sequentially. */
+    for (int i = 0; i < 4; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    /* Reset. */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify records 4-9 are present (6 remaining). */
+    int count = 0;
+    uint8_t expected_min = 0x54; /* record 4 */
+    uint8_t expected_max = 0x59; /* record 9 */
+    
+    while (fcb_read(&fcb_after_reset, rbuf, &rlen) == FCB_OK)
+    {
+        TEST_ASSERT_TRUE(rbuf[0] >= expected_min && rbuf[0] <= expected_max);
+        count++;
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+    TEST_ASSERT_EQUAL_INT(6, count);
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_reset_recovery_fifo_order_maintained(void)
+{
+    /*
+     * Write records with sequential values, delete half, reset,
+     * and verify remaining records are still in FIFO order.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[8];
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+
+    /* Write records with sequential values 1-20. */
+    for (uint8_t i = 1; i <= 20; i++)
+    {
+        memset(wbuf, i, sizeof(wbuf));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+    }
+
+    /* Delete first 10 records. */
+    for (int i = 0; i < 10; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    /* Reset. */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify records 11-20 are readable in order. */
+    for (uint8_t expected = 11; expected <= 20; expected++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_UINT8(expected, rbuf[0]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+/* ================================================================== */
 /*  --- Minimum 2-sector configuration ---                            */
 /* ================================================================== */
 
@@ -1557,6 +1957,16 @@ int main(void)
     RUN_TEST(test_recovery_truncates_partial_write);
     RUN_TEST(test_recovery_empty_after_all_deleted);
     RUN_TEST(test_recovery_then_continue_appending);
+
+    /* Reset recovery with existing data */
+    RUN_TEST(test_reset_recovery_with_unread_records);
+    RUN_TEST(test_reset_recovery_with_partially_consumed_data);
+    RUN_TEST(test_reset_recovery_with_mixed_operations);
+    RUN_TEST(test_reset_recovery_with_spanning_records);
+    RUN_TEST(test_reset_recovery_with_multiple_sectors);
+    RUN_TEST(test_reset_recovery_preserves_record_integrity);
+    RUN_TEST(test_reset_recovery_after_partial_deletion_sequence);
+    RUN_TEST(test_reset_recovery_fifo_order_maintained);
 
     /* Multi-sector circular wrap-around */
     RUN_TEST(test_circular_wrap_write_discard_reuse);
