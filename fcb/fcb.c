@@ -992,9 +992,9 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
 /*  fcb_read — peek the oldest unconsumed record (non-destructive)     */
 /* ================================================================== */
 
-int fcb_read(fcb_t *fcb, uint8_t *buf, size_t *len_out)
+int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted || !buf || !len_out)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted || !buf || !len_out || buf_len == 0)
     {
         return FCB_INVALID_ARG;
     }
@@ -1034,6 +1034,12 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t *len_out)
     {
         fcb_unlock(fcb);
         return FCB_CORRUPTED;
+    }
+
+    if (rhdr.length > buf_len)
+    {
+        fcb_unlock(fcb);
+        return FCB_INVALID_ARG;  // Or a new error code, but reuse for now
     }
 
     /* -------------------------------------------------------------- */

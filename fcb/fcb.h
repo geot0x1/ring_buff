@@ -220,7 +220,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len);
  * @param len_out  On success, set to the record length.
  * @return FCB_OK, FCB_EMPTY, FCB_CORRUPTED, or FCB_ERR_FLASH.
  */
-int fcb_read(fcb_t *fcb, uint8_t *buf, size_t *len_out);
+int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
 
 /**
  * @brief Mark the oldest unconsumed record as consumed and advance head.
