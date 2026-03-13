@@ -477,6 +477,96 @@ void test_empty_after_all_records_deleted(void)
     TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
 }
 
+void test_write_returns_full_when_buffer_full(void)
+{
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;  /* reduce total capacity to hit full quickly */
+
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t buf[FCB_MAX_RECORD_SIZE];
+    memset(buf, 0xAB, sizeof(buf));
+
+    int rc = FCB_OK;
+    for (int i = 0; i < 200; i++)
+    {
+        rc = fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE);
+        if (rc != FCB_OK)
+        {
+            break;
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, rc);
+    TEST_ASSERT_FALSE(fcb_is_empty(&fcb));
+}
+
+void test_is_full_on_uninitialised_fcb_returns_true(void)
+{
+    fcb_t fcb;
+    memset(&fcb, 0, sizeof(fcb));
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+}
+
+void test_is_empty_on_uninitialised_fcb_returns_true(void)
+{
+    fcb_t fcb;
+    memset(&fcb, 0, sizeof(fcb));
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+void test_read_detects_crc_mismatch(void)
+{
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[16];
+    memset(wbuf, 0xAA, sizeof(wbuf));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+
+    /* Corrupt the first data byte to force a CRC mismatch. */
+    uint32_t data_addr = fcb.config.start_addr +
+                         (uint32_t)fcb.head_sector * fcb.config.sector_size +
+                         fcb.head_offset + FCB_RECORD_HDR_SIZE;
+    uint8_t corrupt = 0x00;
+    TEST_ASSERT_EQUAL_INT(0, flash_write(data_addr, &corrupt, 1));
+
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    TEST_ASSERT_EQUAL_INT(FCB_CORRUPTED, fcb_read(&fcb, rbuf, &rlen));
+}
+
+void test_delete_treats_invalid_header_as_empty(void)
+{
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t val = 0x12;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, &val, 1));
+
+    /* Corrupt the record header magic so it becomes invalid. */
+    uint32_t hdr_addr = fcb.config.start_addr +
+                        (uint32_t)fcb.head_sector * fcb.config.sector_size +
+                        fcb.head_offset;
+    uint8_t corrupt_hdr[4] = {0x00, 0x00, 0x00, 0x00};
+    TEST_ASSERT_EQUAL_INT(0, flash_write(hdr_addr, corrupt_hdr, sizeof(corrupt_hdr)));
+
+    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_delete(&fcb));
+}
+
+void test_discard_on_no_valid_sectors_returns_empty(void)
+{
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    /* Erase the only valid sector so no valid sectors remain. */
+    TEST_ASSERT_EQUAL_INT(0, flash_erase_sector(fcb.config.start_addr));
+
+    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_discard_oldest_sector(&fcb));
+}
+
 /* ================================================================== */
 /*  --- fcb_discard_oldest_sector tests ---                           */
 /* ================================================================== */
@@ -787,7 +877,13 @@ int main(void)
     /* fcb_is_empty / fcb_is_full */
     RUN_TEST(test_is_empty_on_fresh_init);
     RUN_TEST(test_not_empty_after_write);
+    RUN_TEST(test_is_full_on_uninitialised_fcb_returns_true);
+    RUN_TEST(test_is_empty_on_uninitialised_fcb_returns_true);
     RUN_TEST(test_empty_after_all_records_deleted);
+    RUN_TEST(test_write_returns_full_when_buffer_full);
+    RUN_TEST(test_read_detects_crc_mismatch);
+    RUN_TEST(test_delete_treats_invalid_header_as_empty);
+    RUN_TEST(test_discard_on_no_valid_sectors_returns_empty);
 
     /* fcb_discard_oldest_sector */
     RUN_TEST(test_discard_null_fcb);
