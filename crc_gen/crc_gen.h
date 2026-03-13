@@ -1,5 +1,5 @@
-#ifndef CRC32_H
-#define CRC32_H
+#ifndef CRC_GEN_H
+#define CRC_GEN_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -15,4 +15,4 @@
  */
 uint32_t crc32_gen(const uint8_t *buf, uint32_t len, uint32_t start);
 
-#endif // CRC32_H
+#endif // CRC_GEN_H

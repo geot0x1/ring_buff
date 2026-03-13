@@ -19,13 +19,13 @@ static void crc32_init_table(void) {
   table_initialized = 1;
 }
 
-uint32_t crc32_gen(const void *data, size_t len) {
+uint32_t crc32_gen(const uint8_t *buf, uint32_t len, uint32_t start) {
   if (!table_initialized) {
     crc32_init_table();
   }
 
-  const uint8_t *p = (const uint8_t *)data;
-  uint32_t crc = 0xFFFFFFFF;
+  const uint8_t *p = buf;
+  uint32_t crc = start;
 
   while (len--) {
     crc = (crc >> 8) ^ crc32_table[(crc ^ *p++) & 0xFF];

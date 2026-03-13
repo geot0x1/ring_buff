@@ -19,7 +19,7 @@ FetchContent_MakeAvailable(unity)
 # Add subdirectories
 add_subdirectory(fcb)
 add_subdirectory(flash_mem)
-add_subdirectory(crc32)
+add_subdirectory(crc_gen)
 
 # Enable testing
 enable_testing()
@@ -32,7 +32,7 @@ target_include_directories(test_fcb PRIVATE
     ${CMAKE_SOURCE_DIR}
 )
 
-target_link_libraries(test_fcb PRIVATE fcb flash_mem crc32 unity)
+target_link_libraries(test_fcb PRIVATE fcb flash_mem crc_gen unity)
 
 target_compile_features(test_fcb PRIVATE c_std_99)
 

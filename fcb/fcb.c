@@ -27,7 +27,7 @@
  */
 
 #include "fcb.h"
-#include "../crc32/crc32.h"
+#include "crc_gen.h"
 
 #include <string.h>
 
@@ -937,7 +937,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     /* -------------------------------------------------------------- */
     /*  Compute CRC-32 of the data                                     */
     /* -------------------------------------------------------------- */
-    uint32_t crc = crc32_gen(data, len);
+    uint32_t crc = crc32_gen(data, len, 0xFFFFFFFF);
 
     /* -------------------------------------------------------------- */
     /*  Build and program the record header                            */
@@ -1058,7 +1058,7 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t *len_out)
     /* -------------------------------------------------------------- */
     /*  Verify CRC                                                     */
     /* -------------------------------------------------------------- */
-    uint32_t crc = crc32_gen(buf, rhdr.length);
+    uint32_t crc = crc32_gen(buf, rhdr.length, 0xFFFFFFFF);
     if (crc != rhdr.crc32)
     {
         fcb_unlock(fcb);
