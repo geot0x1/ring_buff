@@ -214,7 +214,10 @@ void test_init_recovery_after_write(void)
     init_fcb(&fcb, 0);
 
     uint8_t wbuf[64];
-    for (int i = 0; i < 64; i++) wbuf[i] = (uint8_t)i;
+    for (int i = 0; i < 64; i++)
+    {
+        wbuf[i] = (uint8_t)i;
+    }
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
 
     /* Re-mount: new fcb_t, same flash state (no flash_init call). */
@@ -335,7 +338,10 @@ void test_read_single_record_correct_data(void)
     init_fcb(&fcb, 0);
 
     uint8_t wbuf[128];
-    for (int i = 0; i < 128; i++) wbuf[i] = (uint8_t)i;
+    for (int i = 0; i < 128; i++)
+    {
+        wbuf[i] = (uint8_t)i;
+    }
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
 
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
@@ -370,7 +376,9 @@ void test_read_fifo_order(void)
     init_fcb(&fcb, 0);
 
     for (uint8_t i = 1; i <= 5; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, &i, 1));
+    }
 
     for (uint8_t expected = 1; expected <= 5; expected++)
     {
@@ -476,7 +484,9 @@ void test_empty_after_all_records_deleted(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, &val, 1));
     }
     for (int i = 0; i < 5; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
     TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
 }
 
@@ -618,13 +628,17 @@ void test_discard_full_lifecycle(void)
     memset(wbuf, 0xCD, sizeof(wbuf));
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
+    }
 
     /* Tail must have advanced to sector 1 (record 64 spanned). */
     TEST_ASSERT_EQUAL_UINT8(1, fcb.tail_sector);
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
 
     /* Head must have left sector 0. */
     TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)fcb.head_sector);
@@ -661,7 +675,10 @@ void test_spanning_record_write_and_read(void)
     }
 
     /* Record 63: distinct incrementing pattern — this one spans */
-    for (size_t i = 0; i < FCB_MAX_RECORD_SIZE; i++) wbuf[i] = (uint8_t)(i & 0xFF);
+    for (size_t i = 0; i < FCB_MAX_RECORD_SIZE; i++)
+    {
+        wbuf[i] = (uint8_t)(i & 0xFF);
+    }
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
 
     /* Verify the tail crossed into sector 1. */
@@ -699,10 +716,14 @@ void test_spanning_record_delete_advances_head_to_next_sector(void)
     memset(wbuf, 0xFE, sizeof(wbuf));
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
+    }
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
 
     /* Head must have crossed into sector 1 (spanning record was last). */
     TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)fcb.head_sector);
@@ -727,7 +748,9 @@ void test_spanning_full_lifecycle_with_discard(void)
     memset(wbuf, 0x5A, sizeof(wbuf));
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
+    }
 
     for (int i = 0; i < 64; i++)
     {
@@ -798,10 +821,14 @@ void test_lock_unlock_called_on_discard(void)
     memset(wbuf, 0x5A, sizeof(wbuf));
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
+    }
 
     for (int i = 0; i < 64; i++)
+    {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
 
     g_lock_count = g_unlock_count = 0;
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_discard_oldest_sector(&fcb));
