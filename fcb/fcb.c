@@ -514,6 +514,16 @@ static int prepare_next_sector(fcb_t *fcb)
 {
     uint8_t ns = next_sector(fcb, fcb->write_ptr_sector);
 
+    /* Check if the next sector is blocked by delete_ptr.
+     * We can only move to the next sector if it's not the sector containing
+     * unread (unconsumed) records.  Note: if we're already in the delete_ptr_sector,
+     * we can still write more in it (different offsets), so we only check when
+     * moving to a DIFFERENT sector.                                           */
+    if (ns == fcb->delete_ptr_sector && fcb->write_ptr_sector != fcb->delete_ptr_sector)
+    {
+        return FCB_FULL;
+    }
+
     /* Check if the sector needs to be erased first.
      * Read its header — if the magic is present, it's still in use
      * or was a previously valid sector.  We only get here if the
