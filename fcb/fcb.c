@@ -629,6 +629,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
         fcb->tail_sector   = 0;
         fcb->tail_offset   = FCB_SECTOR_HDR_SIZE;
         fcb->magic         = FCB_INIT_MAGIC;
+        fcb->is_mounted    = true;
         return FCB_OK;
     }
 
@@ -823,6 +824,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
     }
 
     fcb->magic = FCB_INIT_MAGIC;
+    fcb->is_mounted = true;
     return FCB_OK;
 }
 
@@ -832,7 +834,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
 
 int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted)
     {
         return FCB_INVALID_ARG;
     }
@@ -992,7 +994,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
 
 int fcb_read(fcb_t *fcb, uint8_t *buf, size_t *len_out)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !buf || !len_out)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted || !buf || !len_out)
     {
         return FCB_INVALID_ARG;
     }
@@ -1075,7 +1077,7 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t *len_out)
 
 int fcb_delete(fcb_t *fcb)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted)
     {
         return FCB_INVALID_ARG;
     }
@@ -1216,7 +1218,7 @@ int fcb_delete(fcb_t *fcb)
 
 int fcb_discard_oldest_sector(fcb_t *fcb)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted)
     {
         return FCB_INVALID_ARG;
     }
@@ -1314,7 +1316,7 @@ int fcb_discard_oldest_sector(fcb_t *fcb)
 
 bool fcb_is_full(const fcb_t *fcb)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted)
     {
         return true;  /* treat uninitialised as full for safety */
     }
@@ -1330,7 +1332,7 @@ bool fcb_is_full(const fcb_t *fcb)
 
 bool fcb_is_empty(const fcb_t *fcb)
 {
-    if (!fcb || fcb->magic != FCB_INIT_MAGIC)
+    if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted)
     {
         return true;  /* treat uninitialised as empty for safety */
     }

@@ -180,6 +180,8 @@ typedef struct
     uint32_t next_sequence;       /**< Next monotonic sequence number to assign.                        */
 
     uint32_t magic;               /**< Internal canary set after successful init (0xFCB0FCB0).         */
+
+    bool     is_mounted;          /**< Indicates FCB is fully initialized and ready for use.            */
 } fcb_t;
 
 /* ------------------------------------------------------------------ */
