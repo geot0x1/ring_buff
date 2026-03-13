@@ -1,0 +1,1 @@
+Always follow the C++ bracing and indentation rules defined in `.agent/rules/styleguide.md`
