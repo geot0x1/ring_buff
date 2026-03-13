@@ -1163,6 +1163,9 @@ int fcb_delete(fcb_t *fcb)
     /* -------------------------------------------------------------- */
     /*  Advance delete_ptr past this deleted record                    */
     /* -------------------------------------------------------------- */
+    uint8_t  old_delete_sec = fcb->delete_ptr_sector;
+    uint32_t old_delete_off = fcb->delete_ptr_offset;
+    
     uint8_t  new_delete_sec;
     uint32_t new_delete_off;
     advance_past_record(fcb, fcb->delete_ptr_sector, fcb->delete_ptr_offset,
@@ -1175,8 +1178,8 @@ int fcb_delete(fcb_t *fcb)
     /*  Advance read_ptr past this record if it points to same record  */
     /*  (i.e., the user didn't read this record before deleting)       */
     /* -------------------------------------------------------------- */
-    if (fcb->read_ptr_sector == new_delete_sec &&
-        fcb->read_ptr_offset == new_delete_off)
+    if (fcb->read_ptr_sector == old_delete_sec &&
+        fcb->read_ptr_offset == old_delete_off)
     {
         /* The record hasn't been read, but it's been deleted.
          * Advance read_ptr to skip it, and continue skipping any
