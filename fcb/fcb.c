@@ -1220,10 +1220,13 @@ int fcb_delete(fcb_t *fcb)
     /*  When head has advanced past all unconsumed records and reached   */
     /*  (or passed) the tail position, synchronize tail to head.  This  */
     /*  ensures fcb_is_empty() correctly identifies an empty buffer.    */
+    /*                                                                 */
+    /*  Handle circular wrapping: if head and tail are in different      */
+    /*  sectors, head has caught or passed tail (wrapping counts as      */
+    /*  passing). If in same sector, check offsets.                      */
     /* -------------------------------------------------------------- */
-    if ((fcb->head_sector > fcb->tail_sector) ||
-        (fcb->head_sector == fcb->tail_sector &&
-         fcb->head_offset >= fcb->tail_offset))
+    if ((fcb->head_sector != fcb->tail_sector) ||
+        (fcb->head_offset >= fcb->tail_offset))
     {
         fcb->tail_sector = fcb->head_sector;
         fcb->tail_offset = fcb->head_offset;
@@ -1284,39 +1287,12 @@ int fcb_discard_oldest_sector(fcb_t *fcb)
     /*  Verify all records in this sector are consumed                  */
     /* -------------------------------------------------------------- */
 
-    /* If head is still pointing into this sector, we need to check if
-     * the sector is truly fully consumed (all records marked consumed).
-     * Allow discard if: (1) sector is fully consumed, OR (2) head==tail    */
+    /* If head is still pointing into this sector, the sector cannot be
+     * discarded. The head pointer must advance out before discard.      */
     if ((uint8_t)oldest_sector == fcb->head_sector)
     {
-        /* Special case: if head and tail are equal and both point outside
-         * this sector's remaining data, the sector can be discarded.       */
-        if (fcb->head_sector == fcb->tail_sector &&
-            fcb->head_offset == fcb->tail_offset)
-        {
-            /* Fall through to check if fully consumed */
-        }
-        else
-        {
-            /* Head is in the oldest sector but not equal to tail.
-             * We need to verify that all records up to head are consumed.  */
-            bool fully_consumed_to_head = false;
-            rc = sector_is_fully_consumed(fcb, (uint8_t)oldest_sector,
-                                          fcb->head_sector, fcb->head_offset,
-                                          &fully_consumed_to_head);
-            if (rc != FCB_OK)
-            {
-                fcb_unlock(fcb);
-                return rc;
-            }
-
-            if (!fully_consumed_to_head)
-            {
-                fcb_unlock(fcb);
-                return FCB_NOT_CONSUMED;
-            }
-            /* Fall through to discard */
-        }
+        fcb_unlock(fcb);
+        return FCB_NOT_CONSUMED;
     }
 
     bool fully_consumed = false;
