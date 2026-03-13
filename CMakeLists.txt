@@ -16,28 +16,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(unity)
 
-# Source files
-set(SOURCES
-    main.c
-)
-
 # Add subdirectories
 add_subdirectory(fcb)
 add_subdirectory(flash_mem)
 add_subdirectory(crc32)
 add_subdirectory(tests)
 
-# Executable
-add_executable(${PROJECT_NAME} ${SOURCES})
-
-# Link libraries
-target_link_libraries(${PROJECT_NAME} PRIVATE fcb flash_mem crc32)
-
-# Basic compiler options for GCC
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -O2)
-endif()
-
 # Enable testing
 enable_testing()
+
+# Automatically run tests as part of every build
+add_custom_target(run_tests ALL
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    DEPENDS test_fcb
+    COMMENT "Running unit tests..."
+)
 

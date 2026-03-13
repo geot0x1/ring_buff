@@ -1,6 +1,6 @@
 # ── Test executable ────────────────────────────────────────────────────────────
 enable_testing()
-add_executable(test_fcb test_fcb.c)
+add_executable(test_fcb ../main.c)
 
 # Unity's public header is in <unity_SOURCE_DIR>/src/unity.h.
 # The workspace root gives access to fcb/, flash_mem/, crc32/.
