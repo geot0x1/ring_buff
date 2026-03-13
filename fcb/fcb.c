@@ -698,8 +698,14 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
             continue;
         }
 
-        /* Parse records within this sector. */
-        cur_offset = FCB_SECTOR_HDR_SIZE;
+        /* Parse records within this sector.
+         * If a spanning record from the previous sector deposited its
+         * data tail here, resume from that end position so we don't
+         * re-start in the middle of payload bytes. */
+        cur_offset = (last_valid_sector == cur_sector &&
+                      last_valid_offset > FCB_SECTOR_HDR_SIZE)
+                     ? last_valid_offset
+                     : FCB_SECTOR_HDR_SIZE;
 
         while (cur_offset + FCB_RECORD_HDR_SIZE <= fcb->config.sector_size)
         {
