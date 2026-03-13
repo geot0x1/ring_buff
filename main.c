@@ -203,10 +203,12 @@ void test_init_head_tail_at_sector0_after_hdr(void)
 {
     fcb_t fcb;
     init_fcb(&fcb, 0);
-    TEST_ASSERT_EQUAL_UINT8(0, fcb.head_sector);
-    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.head_offset);
-    TEST_ASSERT_EQUAL_UINT8(0, fcb.tail_sector);
-    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.tail_offset);
+    TEST_ASSERT_EQUAL_UINT8(0, fcb.delete_ptr_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.delete_ptr_offset);
+    TEST_ASSERT_EQUAL_UINT8(0, fcb.read_ptr_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.read_ptr_offset);
+    TEST_ASSERT_EQUAL_UINT8(0, fcb.write_ptr_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.write_ptr_offset);
 }
 
 void test_init_recovery_after_write(void)
@@ -836,8 +838,8 @@ void test_read_detects_crc_mismatch(void)
 
     /* Corrupt the first data byte to force a CRC mismatch. */
     uint32_t data_addr = fcb.config.start_addr +
-                         (uint32_t)fcb.head_sector * fcb.config.sector_size +
-                         fcb.head_offset + FCB_RECORD_HDR_SIZE;
+                         (uint32_t)fcb.read_ptr_sector * fcb.config.sector_size +
+                         fcb.read_ptr_offset + FCB_RECORD_HDR_SIZE;
     uint8_t corrupt = 0x00;
     TEST_ASSERT_EQUAL_INT(0, flash_write(data_addr, &corrupt, 1));
 
@@ -856,8 +858,8 @@ void test_delete_treats_invalid_header_as_empty(void)
 
     /* Corrupt the record header magic so it becomes invalid. */
     uint32_t hdr_addr = fcb.config.start_addr +
-                        (uint32_t)fcb.head_sector * fcb.config.sector_size +
-                        fcb.head_offset;
+                        (uint32_t)fcb.read_ptr_sector * fcb.config.sector_size +
+                        fcb.read_ptr_offset;
     uint8_t corrupt_hdr[4] = {0x00, 0x00, 0x00, 0x00};
     TEST_ASSERT_EQUAL_INT(0, flash_write(hdr_addr, corrupt_hdr, sizeof(corrupt_hdr)));
 
@@ -927,16 +929,16 @@ void test_discard_full_lifecycle(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
     }
 
-    /* Tail must have advanced to sector 1 (record 64 spanned). */
-    TEST_ASSERT_EQUAL_UINT8(1, fcb.tail_sector);
+    /* Write_ptr must have advanced to sector 1 (record 64 spanned). */
+    TEST_ASSERT_EQUAL_UINT8(1, fcb.write_ptr_sector);
 
     for (int i = 0; i < 64; i++)
     {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
 
-    /* Head must have left sector 0. */
-    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)fcb.head_sector);
+    /* Read_ptr must have left sector 0. */
+    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)fcb.read_ptr_sector);
 
     /* Sector 0 fully consumed → discard succeeds. */
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_discard_oldest_sector(&fcb));
@@ -976,8 +978,8 @@ void test_spanning_record_write_and_read(void)
     }
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
 
-    /* Verify the tail crossed into sector 1. */
-    TEST_ASSERT_EQUAL_UINT8(1, fcb.tail_sector);
+    /* Verify the write_ptr crossed into sector 1. */
+    TEST_ASSERT_EQUAL_UINT8(1, fcb.write_ptr_sector);
 
     /* Consume the 63 non-spanning records to advance head. */
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
@@ -1020,8 +1022,8 @@ void test_spanning_record_delete_advances_head_to_next_sector(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
 
-    /* Head must have crossed into sector 1 (spanning record was last). */
-    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)fcb.head_sector);
+    /* Read_ptr must have crossed into sector 1 (spanning record was last). */
+    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)fcb.read_ptr_sector);
 
     /* Buffer must now be empty. */
     TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
@@ -1241,8 +1243,8 @@ void test_recovery_truncates_partial_write(void)
      * Data area is left as 0xFF (erased).
      */
     uint32_t hdr_addr = fcb.config.start_addr
-                      + (uint32_t)fcb.tail_sector * fcb.config.sector_size
-                      + fcb.tail_offset;
+                      + (uint32_t)fcb.write_ptr_sector * fcb.config.sector_size
+                      + fcb.write_ptr_offset;
 
     fcb_record_hdr_t fake;
     memset(&fake, 0xFF, sizeof(fake));
@@ -1365,7 +1367,7 @@ void test_circular_wrap_write_discard_reuse(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK,
                               fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
     }
-    TEST_ASSERT_EQUAL_UINT8(1, fcb.tail_sector);
+    TEST_ASSERT_EQUAL_UINT8(1, fcb.write_ptr_sector);
 
     for (int i = 0; i < 64; i++)
     {
@@ -1380,7 +1382,7 @@ void test_circular_wrap_write_discard_reuse(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK,
                               fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
     }
-    TEST_ASSERT_EQUAL_UINT8(2, fcb.tail_sector);
+    TEST_ASSERT_EQUAL_UINT8(2, fcb.write_ptr_sector);
 
     for (int i = 0; i < 63; i++)
     {
@@ -1388,9 +1390,9 @@ void test_circular_wrap_write_discard_reuse(void)
     }
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_discard_oldest_sector(&fcb));
 
-    /* Phase 3: write into sector 2 until tail wraps to sector 0. */
+    /* Phase 3: write into sector 2 until write_ptr wraps to sector 0. */
     int count = 0;
-    while (fcb.tail_sector == 2 && count < 100)
+    while (fcb.write_ptr_sector == 2 && count < 100)
     {
         memset(wbuf, (uint8_t)(count + 200), sizeof(wbuf));
         int rc = fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE);
@@ -1401,8 +1403,8 @@ void test_circular_wrap_write_discard_reuse(void)
         count++;
     }
 
-    /* Tail should have wrapped to sector 0. */
-    TEST_ASSERT_EQUAL_UINT8(0, fcb.tail_sector);
+    /* Write_ptr should have wrapped to sector 0. */
+    TEST_ASSERT_EQUAL_UINT8(0, fcb.write_ptr_sector);
     TEST_ASSERT_GREATER_THAN_INT(0, count);
 
     /* Read and verify all phase-3 records in FIFO order. */
@@ -1675,14 +1677,14 @@ void test_multiple_sequential_discards(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK,
                               fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
     }
-    TEST_ASSERT_EQUAL_UINT8(2, fcb.tail_sector);
+    TEST_ASSERT_EQUAL_UINT8(2, fcb.write_ptr_sector);
 
     /* Delete all 127 records. */
     for (int i = 0; i < 127; i++)
     {
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
-    TEST_ASSERT_EQUAL_UINT8(2, fcb.head_sector);
+    TEST_ASSERT_EQUAL_UINT8(2, fcb.read_ptr_sector);
 
     /* Discard sector 0 (oldest). */
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_discard_oldest_sector(&fcb));
@@ -1901,9 +1903,9 @@ void test_reset_recovery_with_spanning_records(void)
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, FCB_MAX_RECORD_SIZE));
     }
 
-    /* Verify tail crossed into sector 1 before reset. */
-    uint8_t tail_sector_before = fcb.tail_sector;
-    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)tail_sector_before);
+    /* Verify write_ptr crossed into sector 1 before reset. */
+    uint8_t write_ptr_sector_before = fcb.write_ptr_sector;
+    TEST_ASSERT_NOT_EQUAL_UINT(0u, (unsigned)write_ptr_sector_before);
 
     /* Reset. */
     fcb_t fcb_after_reset;
@@ -1911,8 +1913,8 @@ void test_reset_recovery_with_spanning_records(void)
     make_cfg(&cfg, 0);
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
 
-    /* Verify tail position is recovered correctly. */
-    TEST_ASSERT_EQUAL_UINT8(tail_sector_before, fcb_after_reset.tail_sector);
+    /* Verify write_ptr position is recovered correctly. */
+    TEST_ASSERT_EQUAL_UINT8(write_ptr_sector_before, fcb_after_reset.write_ptr_sector);
 
     /* Read and verify all 64 records. */
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];

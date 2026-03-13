@@ -171,17 +171,34 @@ typedef struct
 {
     fcb_config_t config;
 
-    uint8_t  head_sector;         /**< Sector index of the oldest unconsumed record (0..num_sectors-1). */
-    uint32_t head_offset;         /**< Byte offset within head_sector (after sector header).            */
+    /**
+     * Three-pointer FIFO architecture:
+     *   delete_ptr → read_ptr → write_ptr (circular order)
+     * 
+     * delete_ptr: Points to the first item to be deleted. When fcb_delete() 
+     *             is called, it deletes items starting from here until 
+     *             reaching read_ptr. Returns error if delete_ptr == read_ptr.
+     * 
+     * read_ptr:   Points to the oldest unconsumed (unread) record. fcb_read() 
+     *             retrieves from here. Advances via fcb_delete().
+     * 
+     * write_ptr:  Points to where the next write will occur. fcb_write() 
+     *             appends data here.
+     */
+    uint8_t  delete_ptr_sector;   /**< Sector index of the delete pointer (0..num_sectors-1).        */
+    uint32_t delete_ptr_offset;   /**< Byte offset within delete_ptr_sector (after sector header).   */
 
-    uint8_t  tail_sector;         /**< Sector index where the next write will go.                       */
-    uint32_t tail_offset;         /**< Byte offset within tail_sector (next free byte).                 */
+    uint8_t  read_ptr_sector;     /**< Sector index of the read pointer (0..num_sectors-1).          */
+    uint32_t read_ptr_offset;     /**< Byte offset within read_ptr_sector (after sector header).     */
 
-    uint32_t next_sequence;       /**< Next monotonic sequence number to assign.                        */
+    uint8_t  write_ptr_sector;    /**< Sector index where the next write will go.                    */
+    uint32_t write_ptr_offset;    /**< Byte offset within write_ptr_sector (next free byte).         */
 
-    uint32_t magic;               /**< Internal canary set after successful init (0xFCB0FCB0).         */
+    uint32_t next_sequence;       /**< Next monotonic sequence number to assign.                      */
 
-    bool     is_mounted;          /**< Indicates FCB is fully initialized and ready for use.            */
+    uint32_t magic;               /**< Internal canary set after successful init (0xFCB0FCB0).       */
+
+    bool     is_mounted;          /**< Indicates FCB is fully initialized and ready for use.          */
 } fcb_t;
 
 /* ------------------------------------------------------------------ */

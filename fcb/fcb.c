@@ -413,80 +413,89 @@ static int sector_is_fully_consumed(const fcb_t *fcb, uint8_t idx,
 /**
  * Calculate the total free space available for writing.
  *
- * Free space is measured from the tail (write pointer) to the head
- * (read pointer) in the circular layout, minus one sector as a guard
- * to distinguish full from empty.
+ * Free space is measured from the write_ptr (write position) to the 
+ * delete_ptr (delete position) in the circular layout, minus one sector 
+ * as a guard to distinguish full from empty.
  *
- * When tail == head and the buffer is empty, all space is available.
- * When tail catches up to head, the buffer is full.
+ * Pointer order (circular): delete_ptr >> read_ptr >> write_ptr
+ *
+ * Empty: write_ptr == read_ptr == delete_ptr
+ * Full: write_ptr catches up to delete_ptr
+ *
+ * When delete_ptr == read_ptr, nothing can be deleted (no consumed records).
+ * When read_ptr == write_ptr, nothing can be read (no unread records).
  */
 static uint32_t free_space(const fcb_t *fcb)
 {
     uint32_t usable_per_sector = fcb->config.sector_size - FCB_SECTOR_HDR_SIZE;
 
-    if (fcb->tail_sector == fcb->head_sector &&
-        fcb->tail_offset == fcb->head_offset)
+    /* Check if buffer is empty (write_ptr == read_ptr). */
+    if (fcb->write_ptr_sector == fcb->read_ptr_sector &&
+        fcb->write_ptr_offset == fcb->read_ptr_offset)
     {
         /*
-         * Either completely empty or completely full.
-         * Disambiguate by checking if any valid record exists at head.
+         * Buffer is empty. All space is available (minus guard sector).
+         * Total usable = (num_sectors - 1) * (sector_size - header).
          */
-        fcb_record_hdr_t rhdr;
-        uint32_t addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
-        int rc = flash_read_checked(fcb, addr, (uint8_t *)&rhdr,
-                                    sizeof(fcb_record_hdr_t));
-        if (rc != FCB_OK || !is_valid_record_header(&rhdr))
+        if (fcb->config.num_sectors <= 1)
         {
-            /* No valid record → buffer is empty → full space available.
-             * Total usable = num_sectors * (sector_size - header).       */
-            return fcb->config.num_sectors * usable_per_sector;
+            return usable_per_sector;
         }
-        else
-        {
-            /* Valid record at the same position → buffer is full. */
-            return 0;
-        }
+        return (fcb->config.num_sectors - 1) * usable_per_sector;
     }
 
     /*
-     * General case: free space = from tail forward (circularly) until
-     * we reach head's sector, but we must keep at least one sector of
-     * margin so that we never let tail_sector == head_sector with valid
-     * unread data (which would be ambiguous).
+     * General case: free space = from write_ptr forward (circularly) until
+     * we reach delete_ptr, but we must keep at least one sector of margin
+     * so that we never let write_ptr == delete_ptr with unconsumed records
+     * (which would be ambiguous for full vs. having only deletable records).
      */
-    if (fcb->tail_sector >= fcb->head_sector)
+    if (fcb->write_ptr_sector >= fcb->delete_ptr_sector)
     {
-        /* tail is at or after head in the linear layout.
-         * Free space = remaining in tail sector
-         *            + full sectors between tail+1 and end
-         *            + full sectors from start to head_sector-1
-         *            + used portion of head sector IS NOT free.
-         * But we reserve one sector to prevent ambiguity.              */
-        uint32_t tail_remain = remaining_in_sector(fcb, fcb->tail_offset);
-        uint32_t sectors_after_tail =
-            (uint32_t)(fcb->config.num_sectors - 1 - fcb->tail_sector);
-        uint32_t sectors_before_head = (uint32_t)fcb->head_sector;
-        /* Subtract one full sector as the guard gap.                    */
-        uint32_t total_free_sectors = sectors_after_tail + sectors_before_head;
-        if (total_free_sectors == 0)
+        /* write_ptr is at or after delete_ptr in the linear layout.
+         * This means we've wrapped around or are in the same region.
+         * Free space = remaining in write_ptr sector
+         *            + full sectors between write_ptr+1 and end
+         *            - sectors reserved before delete_ptr
+         */
+        uint32_t write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
+        uint32_t sectors_after_write =
+            (uint32_t)(fcb->config.num_sectors - 1 - fcb->write_ptr_sector);
+        uint32_t sectors_before_delete = (uint32_t)fcb->delete_ptr_sector;
+        
+        if (sectors_after_write == 0)
         {
-            return tail_remain;
+            /* No full sectors after write_ptr, only remaining space in current. */
+            if (sectors_before_delete > 0)
+            {
+                return (write_remain < usable_per_sector) ? 0 : write_remain;
+            }
+            return write_remain;
         }
-        return tail_remain + (total_free_sectors - 1) * usable_per_sector
-               + usable_per_sector;
+        
+        uint32_t total_free_sectors = sectors_after_write + sectors_before_delete;
+        if (total_free_sectors > 0)
+        {
+            total_free_sectors--;  /* Reserve one sector as guard. */
+        }
+        return write_remain + total_free_sectors * usable_per_sector;
     }
     else
     {
-        /* tail is before head in the linear layout. */
-        uint32_t tail_remain = remaining_in_sector(fcb, fcb->tail_offset);
+        /* write_ptr is before delete_ptr in the linear layout. */
+        uint32_t write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
         uint32_t gap_sectors =
-            (uint32_t)(fcb->head_sector - fcb->tail_sector - 1);
+            (uint32_t)(fcb->delete_ptr_sector - fcb->write_ptr_sector - 1);
+        
         if (gap_sectors == 0)
         {
-            return tail_remain;
+            return write_remain;
         }
-        return tail_remain + (gap_sectors - 1) * usable_per_sector
-               + usable_per_sector;
+        if (gap_sectors > 0)
+        {
+            gap_sectors--;  /* Reserve one sector as guard. */
+        }
+        return write_remain + gap_sectors * usable_per_sector;
     }
 }
 
@@ -495,15 +504,15 @@ static uint32_t free_space(const fcb_t *fcb)
 /* ================================================================== */
 
 /**
- * Ensure the next sector after `tail_sector` is ready for writing.
+ * Ensure the next sector after `write_ptr_sector` is ready for writing.
  * This writes a fresh sector header with an incremented sequence number.
  *
- * The caller must have verified that the next sector is NOT the head
+ * The caller must have verified that the next sector is NOT the delete
  * sector (i.e. the buffer is not full).
  */
 static int prepare_next_sector(fcb_t *fcb)
 {
-    uint8_t ns = next_sector(fcb, fcb->tail_sector);
+    uint8_t ns = next_sector(fcb, fcb->write_ptr_sector);
 
     /* Check if the sector needs to be erased first.
      * Read its header — if the magic is present, it's still in use
@@ -531,8 +540,8 @@ static int prepare_next_sector(fcb_t *fcb)
     }
 
     fcb->next_sequence++;
-    fcb->tail_sector = ns;
-    fcb->tail_offset = FCB_SECTOR_HDR_SIZE;
+    fcb->write_ptr_sector = ns;
+    fcb->write_ptr_offset = FCB_SECTOR_HDR_SIZE;
     return FCB_OK;
 }
 
@@ -624,10 +633,12 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
             return rc;
         }
         fcb->next_sequence = 1;
-        fcb->head_sector   = 0;
-        fcb->head_offset   = FCB_SECTOR_HDR_SIZE;
-        fcb->tail_sector   = 0;
-        fcb->tail_offset   = FCB_SECTOR_HDR_SIZE;
+        fcb->delete_ptr_sector = 0;
+        fcb->delete_ptr_offset = FCB_SECTOR_HDR_SIZE;
+        fcb->read_ptr_sector   = 0;
+        fcb->read_ptr_offset   = FCB_SECTOR_HDR_SIZE;
+        fcb->write_ptr_sector  = 0;
+        fcb->write_ptr_offset  = FCB_SECTOR_HDR_SIZE;
         fcb->magic         = FCB_INIT_MAGIC;
         fcb->is_mounted    = true;
         return FCB_OK;
@@ -779,11 +790,11 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
                 }
             }
 
-            /* Record is valid.  Check if it's the head (first unconsumed). */
+            /* Record is valid.  Check if it's the read_ptr (first unconsumed). */
             if (!head_found && rhdr.consumed != FCB_RECORD_CONSUMED)
             {
-                fcb->head_sector = cur_sector;
-                fcb->head_offset = cur_offset;
+                fcb->read_ptr_sector = cur_sector;
+                fcb->read_ptr_offset = cur_offset;
                 head_found = true;
             }
 
@@ -812,15 +823,19 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
         cur_sector = next_sector(fcb, cur_sector);
     }
 
-    /* Set the tail (write pointer) to after the last valid record. */
-    fcb->tail_sector = last_valid_sector;
-    fcb->tail_offset = last_valid_offset;
+    /* Set the write_ptr (write pointer) to after the last valid record. */
+    fcb->write_ptr_sector = last_valid_sector;
+    fcb->write_ptr_offset = last_valid_offset;
 
-    /* If no unconsumed record was found, head == tail (empty FIFO). */
+    /* Initialize delete_ptr equal to read_ptr (nothing deleted yet). */
+    fcb->delete_ptr_sector = fcb->read_ptr_sector;
+    fcb->delete_ptr_offset = fcb->read_ptr_offset;
+
+    /* If no unconsumed record was found, read_ptr == write_ptr (empty FIFO). */
     if (!head_found)
     {
-        fcb->head_sector = fcb->tail_sector;
-        fcb->head_offset = fcb->tail_offset;
+        fcb->read_ptr_sector = fcb->write_ptr_sector;
+        fcb->read_ptr_offset = fcb->write_ptr_offset;
     }
 
     fcb->magic = FCB_INIT_MAGIC;
@@ -857,9 +872,9 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
      * current sector.  If there isn't enough room for even the header,
      * we must advance to the next sector.
      */
-    uint32_t tail_remain = remaining_in_sector(fcb, fcb->tail_offset);
+    uint32_t write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
 
-    if (tail_remain < FCB_RECORD_HDR_SIZE)
+    if (write_remain < FCB_RECORD_HDR_SIZE)
     {
         /* Not enough room for a record header — move to next sector. */
         rc = prepare_next_sector(fcb);
@@ -868,7 +883,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
             fcb_unlock(fcb);
             return rc;
         }
-        tail_remain = remaining_in_sector(fcb, fcb->tail_offset);
+        write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
     }
 
     /*
@@ -878,10 +893,10 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
      * For spanning: the header fits in the current sector.  The data
      * may need room in the current + next sector.
      */
-    if (tail_remain < total_needed)
+    if (write_remain < total_needed)
     {
         /* Data will span.  Check if the next sector is available. */
-        uint32_t data_in_current = tail_remain - FCB_RECORD_HDR_SIZE;
+        uint32_t data_in_current = write_remain - FCB_RECORD_HDR_SIZE;
         uint32_t data_in_next    = (uint32_t)len - data_in_current;
         uint32_t next_sector_usable =
             fcb->config.sector_size - FCB_SECTOR_HDR_SIZE;
@@ -896,10 +911,10 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
         }
 
         /* Ensure the next sector is prepared. */
-        uint8_t ns = next_sector(fcb, fcb->tail_sector);
+        uint8_t ns = next_sector(fcb, fcb->write_ptr_sector);
 
-        /* Check that the next sector won't collide with head. */
-        if (ns == fcb->head_sector && fcb->tail_sector != fcb->head_sector)
+        /* Check that the next sector won't collide with delete pointer. */
+        if (ns == fcb->delete_ptr_sector && fcb->write_ptr_sector != fcb->delete_ptr_sector)
         {
             /* Would overwrite unread data. */
             fcb_unlock(fcb);
@@ -950,7 +965,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     rhdr.consumed = FCB_RECORD_ACTIVE;
     /* reserved stays 0xFF */
 
-    uint32_t hdr_addr = sector_addr(fcb, fcb->tail_sector) + fcb->tail_offset;
+    uint32_t hdr_addr = sector_addr(fcb, fcb->write_ptr_sector) + fcb->write_ptr_offset;
     rc = flash_program_checked(fcb, hdr_addr, (const uint8_t *)&rhdr,
                                sizeof(fcb_record_hdr_t));
     if (rc != FCB_OK)
@@ -959,9 +974,9 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
         return rc;
     }
 
-    /* Advance tail past the header. */
-    uint8_t  wr_sector = fcb->tail_sector;
-    uint32_t wr_offset = fcb->tail_offset + FCB_RECORD_HDR_SIZE;
+    /* Advance write_ptr past the header. */
+    uint8_t  wr_sector = fcb->write_ptr_sector;
+    uint32_t wr_offset = fcb->write_ptr_offset + FCB_RECORD_HDR_SIZE;
 
     /* Record header is guaranteed to fit.  But the data may span. */
     if (wr_offset >= fcb->config.sector_size)
@@ -980,9 +995,9 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
         return rc;
     }
 
-    /* Update tail to the position after the written data. */
-    fcb->tail_sector = wr_sector;
-    fcb->tail_offset = wr_offset;
+    /* Update write_ptr to the position after the written data. */
+    fcb->write_ptr_sector = wr_sector;
+    fcb->write_ptr_offset = wr_offset;
 
     fcb_unlock(fcb);
     return FCB_OK;
@@ -1002,12 +1017,12 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
     fcb_lock(fcb);
 
     /* Check for empty buffer. */
-    if (fcb->head_sector == fcb->tail_sector &&
-        fcb->head_offset == fcb->tail_offset)
+    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
+        fcb->read_ptr_offset == fcb->write_ptr_offset)
     {
-        /* Verify truly empty: no valid record at head position. */
+        /* Verify truly empty: no valid record at read position. */
         fcb_record_hdr_t rhdr;
-        uint32_t addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
+        uint32_t addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
         int rc = read_record_header(fcb, addr, &rhdr);
         if (rc != FCB_OK || !is_valid_record_header(&rhdr) ||
             rhdr.consumed == FCB_RECORD_CONSUMED)
@@ -1019,10 +1034,10 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
     }
 
     /* -------------------------------------------------------------- */
-    /*  Read the record header at (head_sector, head_offset)           */
+    /*  Read the record header at (read_ptr_sector, read_ptr_offset)    */
     /* -------------------------------------------------------------- */
     fcb_record_hdr_t rhdr;
-    uint32_t hdr_addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
+    uint32_t hdr_addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
     int rc = read_record_header(fcb, hdr_addr, &rhdr);
     if (rc != FCB_OK)
     {
@@ -1045,8 +1060,8 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
     /* -------------------------------------------------------------- */
     /*  Read the data payload (may span sectors)                       */
     /* -------------------------------------------------------------- */
-    uint8_t  d_sec = fcb->head_sector;
-    uint32_t d_off = fcb->head_offset + FCB_RECORD_HDR_SIZE;
+    uint8_t  d_sec = fcb->read_ptr_sector;
+    uint32_t d_off = fcb->read_ptr_offset + FCB_RECORD_HDR_SIZE;
 
     if (d_off >= fcb->config.sector_size)
     {
@@ -1090,26 +1105,26 @@ int fcb_delete(fcb_t *fcb)
 
     fcb_lock(fcb);
 
-    /* Check for empty. */
-    if (fcb->head_sector == fcb->tail_sector &&
-        fcb->head_offset == fcb->tail_offset)
+    /* -------------------------------------------------------------- */
+    /*  Check if there's anything to delete                            */
+    /*                                                                 */
+    /*  We can delete if there's at least one record written.          */
+    /*  If write_ptr == read_ptr, the buffer is empty (no data).       */
+    /* -------------------------------------------------------------- */
+    
+    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
+        fcb->read_ptr_offset == fcb->write_ptr_offset)
     {
-        fcb_record_hdr_t rhdr;
-        uint32_t addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
-        int rc = read_record_header(fcb, addr, &rhdr);
-        if (rc != FCB_OK || !is_valid_record_header(&rhdr) ||
-            rhdr.consumed == FCB_RECORD_CONSUMED)
-        {
-            fcb_unlock(fcb);
-            return FCB_EMPTY;
-        }
+        /* Buffer is empty - nothing to delete. */
+        fcb_unlock(fcb);
+        return FCB_EMPTY;
     }
 
     /* -------------------------------------------------------------- */
-    /*  Read the record header at head position                        */
+    /*  Read the record header at delete_ptr position                  */
     /* -------------------------------------------------------------- */
     fcb_record_hdr_t rhdr;
-    uint32_t hdr_addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
+    uint32_t hdr_addr = sector_addr(fcb, fcb->delete_ptr_sector) + fcb->delete_ptr_offset;
     int rc = read_record_header(fcb, hdr_addr, &rhdr);
     if (rc != FCB_OK)
     {
@@ -1120,19 +1135,19 @@ int fcb_delete(fcb_t *fcb)
     if (!is_valid_record_header(&rhdr))
     {
         fcb_unlock(fcb);
-        return FCB_EMPTY;
+        return FCB_CORRUPTED;
     }
 
     /* -------------------------------------------------------------- */
     /*  Program the consumed flag: 0xFF → 0x00 (single byte, NOR safe) */
     /*                                                                 */
-    /*  This is the atomic, power-fail-safe operation.  Even if power   */
-    /*  fails mid-program, the byte either stays 0xFF (unconsumed) or   */
-    /*  becomes 0x00 (consumed).  Both states are valid.                */
+    /*  This marks the record as deleted. Even if power fails          */
+    /*  mid-program, the byte either stays 0xFF (not deleted) or       */
+    /*  becomes 0x00 (deleted). Both states are valid.                 */
     /* -------------------------------------------------------------- */
     if (rhdr.consumed != FCB_RECORD_CONSUMED)
     {
-        /* Offset of consumed field within the record header.
+        /* Offset of consumed field within the record header:
          * magic(4) + length(2) + crc32(4) = offset 10.                */
         uint32_t consumed_addr = hdr_addr + 10;
         uint8_t  consumed_val  = FCB_RECORD_CONSUMED;
@@ -1146,90 +1161,77 @@ int fcb_delete(fcb_t *fcb)
     }
 
     /* -------------------------------------------------------------- */
-    /*  Advance head past this record                                  */
+    /*  Advance delete_ptr past this deleted record                    */
     /* -------------------------------------------------------------- */
-    uint8_t  new_head_sec;
-    uint32_t new_head_off;
-    advance_past_record(fcb, fcb->head_sector, fcb->head_offset,
-                        rhdr.length, &new_head_sec, &new_head_off);
+    uint8_t  new_delete_sec;
+    uint32_t new_delete_off;
+    advance_past_record(fcb, fcb->delete_ptr_sector, fcb->delete_ptr_offset,
+                        rhdr.length, &new_delete_sec, &new_delete_off);
 
-    fcb->head_sector = new_head_sec;
-    fcb->head_offset = new_head_off;
-
+    fcb->delete_ptr_sector = new_delete_sec;
+    fcb->delete_ptr_offset = new_delete_off;
+    
     /* -------------------------------------------------------------- */
-    /*  Skip any consumed records that follow (fast-forward head)      */
-    /*                                                                 */
-    /*  After a power loss, we may have a series of already-consumed   */
-    /*  records.  Skipping them here ensures fcb_read() always returns  */
-    /*  the first truly unconsumed record.                              */
+    /*  Advance read_ptr past this record if it points to same record  */
+    /*  (i.e., the user didn't read this record before deleting)       */
     /* -------------------------------------------------------------- */
-    while (1)
+    if (fcb->read_ptr_sector == new_delete_sec &&
+        fcb->read_ptr_offset == new_delete_off)
     {
-        /* Stop if head has caught up to tail. */
-        if (fcb->head_sector == fcb->tail_sector &&
-            fcb->head_offset == fcb->tail_offset)
+        /* The record hasn't been read, but it's been deleted.
+         * Advance read_ptr to skip it, and continue skipping any
+         * other already-deleted records that follow. */
+        while (1)
         {
-            break;
-        }
-
-        /* Ensure we can read a record header at this position. */
-        if (fcb->head_offset + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
-        {
-            /* Not enough room for a header in this sector — move to next
-             * valid sector.                                               */
-            uint8_t ns = next_sector(fcb, fcb->head_sector);
-            fcb_sector_hdr_t shdr;
-            rc = read_sector_header(fcb, ns, &shdr);
-            if (rc != FCB_OK || shdr.magic != FCB_SECTOR_MAGIC ||
-                shdr.status != FCB_SECTOR_STATUS_VALID)
+            /* Stop if read_ptr has caught up to write_ptr (end of data). */
+            if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
+                fcb->read_ptr_offset == fcb->write_ptr_offset)
             {
                 break;
             }
-            fcb->head_sector = ns;
-            fcb->head_offset = FCB_SECTOR_HDR_SIZE;
+
+            /* Ensure we can read a record header at this position. */
+            if (fcb->read_ptr_offset + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
+            {
+                /* Not enough room for header - move to next sector. */
+                uint8_t ns = next_sector(fcb, fcb->read_ptr_sector);
+                fcb_sector_hdr_t shdr;
+                rc = read_sector_header(fcb, ns, &shdr);
+                if (rc != FCB_OK || shdr.magic != FCB_SECTOR_MAGIC ||
+                    shdr.status != FCB_SECTOR_STATUS_VALID)
+                {
+                    break;
+                }
+                fcb->read_ptr_sector = ns;
+                fcb->read_ptr_offset = FCB_SECTOR_HDR_SIZE;
+            }
+
+            hdr_addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
+            rc = read_record_header(fcb, hdr_addr, &rhdr);
+            if (rc != FCB_OK)
+            {
+                break;
+            }
+
+            if (!is_valid_record_header(&rhdr))
+            {
+                break;
+            }
+
+            /* If this record is not consumed (unconsumed), stop - found next record to read. */
+            if (rhdr.consumed != FCB_RECORD_CONSUMED)
+            {
+                break;
+            }
+
+            /* This record is consumed - skip it. */
+            uint8_t  skip_sec;
+            uint32_t skip_off;
+            advance_past_record(fcb, fcb->read_ptr_sector, fcb->read_ptr_offset,
+                                rhdr.length, &skip_sec, &skip_off);
+            fcb->read_ptr_sector = skip_sec;
+            fcb->read_ptr_offset = skip_off;
         }
-
-        hdr_addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
-        rc = read_record_header(fcb, hdr_addr, &rhdr);
-        if (rc != FCB_OK)
-        {
-            break;
-        }
-
-        if (!is_valid_record_header(&rhdr))
-        {
-            break;
-        }
-
-        if (rhdr.consumed != FCB_RECORD_CONSUMED)
-        {
-            /* Found the next unconsumed record — stop here. */
-            break;
-        }
-
-        /* This record is also consumed — skip it. */
-        advance_past_record(fcb, fcb->head_sector, fcb->head_offset,
-                            rhdr.length, &new_head_sec, &new_head_off);
-        fcb->head_sector = new_head_sec;
-        fcb->head_offset = new_head_off;
-    }
-
-    /* -------------------------------------------------------------- */
-    /*  Sync tail to head if all records consumed                       */
-    /*                                                                 */
-    /*  When head has advanced past all unconsumed records and reached   */
-    /*  (or passed) the tail position, synchronize tail to head.  This  */
-    /*  ensures fcb_is_empty() correctly identifies an empty buffer.    */
-    /*                                                                 */
-    /*  Handle circular wrapping: if head and tail are in different      */
-    /*  sectors, head has caught or passed tail (wrapping counts as      */
-    /*  passing). If in same sector, check offsets.                      */
-    /* -------------------------------------------------------------- */
-    if ((fcb->head_sector != fcb->tail_sector) ||
-        (fcb->head_offset >= fcb->tail_offset))
-    {
-        fcb->tail_sector = fcb->head_sector;
-        fcb->tail_offset = fcb->head_offset;
     }
 
     fcb_unlock(fcb);
@@ -1287,9 +1289,9 @@ int fcb_discard_oldest_sector(fcb_t *fcb)
     /*  Verify all records in this sector are consumed                  */
     /* -------------------------------------------------------------- */
 
-    /* If head is still pointing into this sector, the sector cannot be
-     * discarded. The head pointer must advance out before discard.      */
-    if ((uint8_t)oldest_sector == fcb->head_sector)
+    /* If read_ptr is still pointing into this sector, the sector cannot be
+     * discarded. The read_ptr must advance out before discard.      */
+    if ((uint8_t)oldest_sector == fcb->read_ptr_sector)
     {
         fcb_unlock(fcb);
         return FCB_NOT_CONSUMED;
@@ -1297,7 +1299,7 @@ int fcb_discard_oldest_sector(fcb_t *fcb)
 
     bool fully_consumed = false;
     rc = sector_is_fully_consumed(fcb, (uint8_t)oldest_sector,
-                                  fcb->tail_sector, fcb->tail_offset,
+                                  fcb->write_ptr_sector, fcb->write_ptr_offset,
                                   &fully_consumed);
     if (rc != FCB_OK)
     {
@@ -1343,11 +1345,11 @@ bool fcb_is_full(const fcb_t *fcb)
 
     fcb_lock((fcb_t *)fcb);
 
-    uint32_t tail_remain = remaining_in_sector(fcb, fcb->tail_offset);
-    uint8_t ns = next_sector(fcb, fcb->tail_sector);
+    uint32_t write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
+    uint8_t ns = next_sector(fcb, fcb->write_ptr_sector);
 
     /* Case 1: Can fit a max-size record in current sector. Definitely not full. */
-    if (tail_remain >= FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE)
+    if (write_remain >= FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE)
     {
         fcb_unlock((fcb_t *)fcb);
         return false;
@@ -1355,14 +1357,14 @@ bool fcb_is_full(const fcb_t *fcb)
 
     /* Case 2: Check if the next sector is available for writing. */
     
-    /* If next sector is head sector (collision), we're blocked. */
-    if (ns == fcb->head_sector && fcb->tail_sector != fcb->head_sector)
+    /* If next sector is delete_ptr sector (collision), we're blocked. */
+    if (ns == fcb->delete_ptr_sector && fcb->write_ptr_sector != fcb->delete_ptr_sector)
     {
         fcb_unlock((fcb_t *)fcb);
-        return true;  /* Blocked by head - full. */
+        return true;  /* Blocked by delete_ptr - full. */
     }
 
-    /* Read next  sector's header to determine if it's in use. */
+    /* Read next sector's header to determine if it's in use. */
     fcb_sector_hdr_t shdr;
     int rc = read_sector_header(fcb, ns, &shdr);
     
@@ -1400,13 +1402,13 @@ bool fcb_is_empty(const fcb_t *fcb)
 
     fcb_lock((fcb_t *)fcb);
 
-    /* Empty when head == tail and no valid unconsumed record at head. */
+    /* Empty when read_ptr == write_ptr and no valid unconsumed record at read_ptr. */
     bool result = false;
-    if (fcb->head_sector == fcb->tail_sector &&
-        fcb->head_offset == fcb->tail_offset)
+    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
+        fcb->read_ptr_offset == fcb->write_ptr_offset)
     {
         fcb_record_hdr_t rhdr;
-        uint32_t addr = sector_addr(fcb, fcb->head_sector) + fcb->head_offset;
+        uint32_t addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
         int rc = flash_read_checked(fcb, addr, (uint8_t *)&rhdr,
                                     sizeof(fcb_record_hdr_t));
         if (rc != FCB_OK)
