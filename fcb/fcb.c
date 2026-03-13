@@ -860,6 +860,47 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
 }
 
 /* ================================================================== */
+/*  is_full_nolock — full check without acquiring the lock            */
+/* ================================================================== */
+
+/**
+ * Must be called with the FCB lock already held (or from a context
+ * where concurrent access is impossible, e.g. inside fcb_write).
+ */
+static bool is_full_nolock(const fcb_t *fcb)
+{
+    uint32_t write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
+    uint8_t  ns           = next_sector(fcb, fcb->write_ptr_sector);
+
+    /* Case 1: Enough room in the current sector for a max-size record. */
+    if (write_remain >= FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE)
+    {
+        return false;
+    }
+
+    /* Case 2: Next sector is blocked by delete_ptr (contains unread data). */
+    if (ns == fcb->delete_ptr_sector && fcb->write_ptr_sector != fcb->delete_ptr_sector)
+    {
+        return true;
+    }
+
+    /* Case 3: Next sector still has a valid header — still in use. */
+    fcb_sector_hdr_t shdr;
+    int rc = read_sector_header(fcb, ns, &shdr);
+    if (rc != FCB_OK)
+    {
+        return true;  /* Can't read — assume full for safety. */
+    }
+
+    if (shdr.magic == FCB_SECTOR_MAGIC && shdr.status == FCB_SECTOR_STATUS_VALID)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+/* ================================================================== */
 /*  fcb_write — append a record                                        */
 /* ================================================================== */
 
@@ -875,6 +916,15 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     }
 
     fcb_lock(fcb);
+
+    /* Reject the write immediately if the buffer is already full.
+     * This ensures that once max-size records can no longer be written,
+     * smaller records are also refused consistently.                    */
+    if (is_full_nolock(fcb))
+    {
+        fcb_unlock(fcb);
+        return FCB_FULL;
+    }
 
     int rc;
     uint32_t total_needed = FCB_RECORD_HDR_SIZE + (uint32_t)len;
@@ -1363,49 +1413,9 @@ bool fcb_is_full(const fcb_t *fcb)
     }
 
     fcb_lock((fcb_t *)fcb);
-
-    uint32_t write_remain = remaining_in_sector(fcb, fcb->write_ptr_offset);
-    uint8_t ns = next_sector(fcb, fcb->write_ptr_sector);
-
-    /* Case 1: Can fit a max-size record in current sector. Definitely not full. */
-    if (write_remain >= FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE)
-    {
-        fcb_unlock((fcb_t *)fcb);
-        return false;
-    }
-
-    /* Case 2: Check if the next sector is available for writing. */
-    
-    /* If next sector is delete_ptr sector (collision), we're blocked. */
-    if (ns == fcb->delete_ptr_sector && fcb->write_ptr_sector != fcb->delete_ptr_sector)
-    {
-        fcb_unlock((fcb_t *)fcb);
-        return true;  /* Blocked by delete_ptr - full. */
-    }
-
-    /* Read next sector's header to determine if it's in use. */
-    fcb_sector_hdr_t shdr;
-    int rc = read_sector_header(fcb, ns, &shdr);
-    
-    if (rc != FCB_OK)
-    {
-        /* Can't read - assume full for safety. */
-        fcb_unlock((fcb_t *)fcb);
-        return true;
-    }
-
-    /* If next sector has valid header, it's in use. We can't write to it. */
-    if (shdr.magic == FCB_SECTOR_MAGIC && shdr.status == FCB_SECTOR_STATUS_VALID)
-    {
-        /* Next sector is in use. Even if we have a little space left in current sector
-         * (< max record size), we're still effectively full because we can't span/move. */
-        fcb_unlock((fcb_t *)fcb);
-        return true;  /* Full - can't move and can't span. */
-    }
-
-    /* Next sector is available. We can write at least a minimal record. */
+    bool full = is_full_nolock(fcb);
     fcb_unlock((fcb_t *)fcb);
-    return false;
+    return full;
 }
 
 /* ================================================================== */
