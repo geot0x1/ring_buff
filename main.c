@@ -1876,6 +1876,282 @@ void test_two_sector_minimum_lifecycle(void)
 }
 
 /* ================================================================== */
+/*  --- Variable data length tests ---                                 */
+/* ================================================================== */
+
+void test_variable_length_systematic_write_read(void)
+{
+    /*
+     * Systematically write and read records with increasing data lengths:
+     * 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024 bytes.
+     * Verify each record is written and read back correctly.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    const size_t test_sizes[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024};
+    const int num_sizes = (int)(sizeof(test_sizes) / sizeof(test_sizes[0]));
+
+    /* Write records with progressively increasing sizes. */
+    for (int i = 0; i < num_sizes; i++)
+    {
+        uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+        memset(wbuf, (uint8_t)(i + 0xA0), test_sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, test_sizes[i]));
+    }
+
+    /* Read and verify each record in FIFO order. */
+    for (int i = 0; i < num_sizes; i++)
+    {
+        uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+        uint8_t expected[FCB_MAX_RECORD_SIZE];
+        size_t rlen = 0;
+
+        memset(expected, (uint8_t)(i + 0xA0), test_sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+        TEST_ASSERT_EQUAL_size_t(test_sizes[i], rlen);
+        TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+void test_variable_length_random_pattern(void)
+{
+    /*
+     * Write records with random (pseudo-deterministic) data patterns
+     * of varying lengths, then read and verify each pattern is preserved.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    const int num_records = 20;
+    const size_t base_sizes[] = {3, 7, 13, 19, 31, 64, 100, 256, 512, 1000};
+
+    for (int i = 0; i < num_records; i++)
+    {
+        size_t len = base_sizes[i % (sizeof(base_sizes) / sizeof(base_sizes[0]))];
+        uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+
+        /* Create a deterministic pattern for this record. */
+        for (size_t j = 0; j < len; j++)
+        {
+            wbuf[j] = (uint8_t)((i * 13 + j * 7) & 0xFF);
+        }
+
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, len));
+    }
+
+    /* Read and verify each record's pattern. */
+    for (int i = 0; i < num_records; i++)
+    {
+        size_t len = base_sizes[i % (sizeof(base_sizes) / sizeof(base_sizes[0]))];
+        uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+        uint8_t expected[FCB_MAX_RECORD_SIZE];
+        size_t rlen = 0;
+
+        for (size_t j = 0; j < len; j++)
+        {
+            expected[j] = (uint8_t)((i * 13 + j * 7) & 0xFF);
+        }
+
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+        TEST_ASSERT_EQUAL_size_t(len, rlen);
+        TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+void test_variable_length_spanning_records(void)
+{
+    /*
+     * Write variable-length records such that some span sector boundaries.
+     * Verify all records, including spanning ones, are read back correctly.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    const size_t test_sizes[] = {256, 512, 768, 1000, 100, 50};
+    const int num_records = (int)(sizeof(test_sizes) / sizeof(test_sizes[0]));
+
+    /* Write records; some will span. */
+    for (int i = 0; i < num_records; i++)
+    {
+        uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+        memset(wbuf, (uint8_t)(i + 0xB0), test_sizes[i]);
+        int rc = fcb_write(&fcb, wbuf, test_sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    }
+
+    /* Read and verify. */
+    for (int i = 0; i < num_records; i++)
+    {
+        uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+        uint8_t expected[FCB_MAX_RECORD_SIZE];
+        size_t rlen = 0;
+
+        memset(expected, (uint8_t)(i + 0xB0), test_sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+        TEST_ASSERT_EQUAL_size_t(test_sizes[i], rlen);
+        TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+void test_variable_length_recovery_integrity(void)
+{
+    /*
+     * Write variable-length records, consume some, reset (re-mount),
+     * and verify remaining records are recovered with correct lengths and data.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    const size_t test_sizes[] = {1, 10, 100, 500, 1024, 50, 200};
+    const int num_records = (int)(sizeof(test_sizes) / sizeof(test_sizes[0]));
+    const int consume_count = 3;
+
+    /* Write all records. */
+    for (int i = 0; i < num_records; i++)
+    {
+        uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+        memset(wbuf, (uint8_t)(i + 0xC0), test_sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, test_sizes[i]));
+    }
+
+    /* Consume first few records. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t rlen = 0;
+    for (int i = 0; i < consume_count; i++)
+    {
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+    }
+
+    /* Reset (re-mount). */
+    fcb_t fcb_after_reset;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb_after_reset, &cfg));
+
+    /* Verify remaining records are present with correct lengths. */
+    for (int i = consume_count; i < num_records; i++)
+    {
+        uint8_t expected[FCB_MAX_RECORD_SIZE];
+        memset(expected, (uint8_t)(i + 0xC0), test_sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+        TEST_ASSERT_EQUAL_size_t(test_sizes[i], rlen);
+        TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb_after_reset));
+}
+
+void test_variable_length_interleaved_operations(void)
+{
+    /*
+     * Interleave write and delete operations with variable-length records.
+     * Verify FIFO order is maintained despite variable data lengths.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    const size_t sizes[] = {10, 100, 50, 1024, 1, 200, 512};
+    const int cycles = 3;
+    int write_count = 0;
+    int read_count = 0;
+
+    for (int cycle = 0; cycle < cycles; cycle++)
+    {
+        /* Write a batch of variable-size records. */
+        for (int i = 0; i < 3; i++)
+        {
+            size_t len = sizes[(write_count + i) % (sizeof(sizes) / sizeof(sizes[0]))];
+            uint8_t wbuf[FCB_MAX_RECORD_SIZE];
+            memset(wbuf, (uint8_t)(write_count + i), len);
+            TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, len));
+        }
+        write_count += 3;
+
+        /* Read and verify a few records. */
+        for (int i = 0; i < 2 && read_count < write_count; i++)
+        {
+            size_t expected_len = sizes[read_count % (sizeof(sizes) / sizeof(sizes[0]))];
+            uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+            uint8_t expected[FCB_MAX_RECORD_SIZE];
+            size_t rlen = 0;
+
+            memset(expected, (uint8_t)read_count, expected_len);
+            TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+            TEST_ASSERT_EQUAL_size_t(expected_len, rlen);
+            TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
+            TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+            read_count++;
+        }
+    }
+
+    /* Drain remaining records. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t rlen = 0;
+    while (read_count < write_count)
+    {
+        size_t expected_len = sizes[read_count % (sizeof(sizes) / sizeof(sizes[0]))];
+        uint8_t expected[FCB_MAX_RECORD_SIZE];
+        memset(expected, (uint8_t)read_count, expected_len);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+        TEST_ASSERT_EQUAL_size_t(expected_len, rlen);
+        TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+        read_count++;
+    }
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+void test_variable_length_boundary_values(void)
+{
+    /*
+     * Test boundary-case lengths:
+     * - Minimum (1 byte)
+     * - Maximum (1024 bytes)
+     * - Just below/above sector remaining space
+     * - Exactly at sector boundary alignments
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    /* Test minimum and maximum. */
+    uint8_t min_buf[1] = {0xAA};
+    uint8_t max_buf[FCB_MAX_RECORD_SIZE];
+    memset(max_buf, 0xBB, sizeof(max_buf));
+
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, min_buf, 1));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, max_buf, FCB_MAX_RECORD_SIZE));
+
+    /* Read and verify minimum. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t rlen = 0;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+    TEST_ASSERT_EQUAL_size_t(1, rlen);
+    TEST_ASSERT_EQUAL_UINT8(0xAA, rbuf[0]);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+
+    /* Read and verify maximum. */
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+    TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
+    TEST_ASSERT_EQUAL_MEMORY(max_buf, rbuf, rlen);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+/* ================================================================== */
 /*  Main — Unity test runner                                           */
 /* ================================================================== */
 
@@ -1986,6 +2262,14 @@ int main(void)
     /* Data integrity edge cases */
     RUN_TEST(test_write_read_all_0xff_payload);
     RUN_TEST(test_mixed_record_sizes);
+
+    /* Variable data length tests */
+    RUN_TEST(test_variable_length_systematic_write_read);
+    RUN_TEST(test_variable_length_random_pattern);
+    RUN_TEST(test_variable_length_spanning_records);
+    RUN_TEST(test_variable_length_recovery_integrity);
+    RUN_TEST(test_variable_length_interleaved_operations);
+    RUN_TEST(test_variable_length_boundary_values);
 
     /* Lock / unlock on additional error paths */
     RUN_TEST(test_lock_unlock_balanced_on_full);
