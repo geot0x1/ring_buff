@@ -540,8 +540,11 @@ void test_fill_fifo_with_small_records_overflow(void)
     int written_count = 0;
     int rc;
 
-    /* Write small records until full. */
-    for (int i = 0; i < 10000; i++)
+    /* Write small records until full.
+     * With 2 sectors of 65536 bytes and 13-byte records (12 hdr + 1 data),
+     * capacity = 2 * ((65536 - 16) / 13) = 10080.  Use 20000 to ensure
+     * the loop always terminates via FCB_FULL rather than the iteration cap. */
+    for (int i = 0; i < 20000; i++)
     {
         small_record = (uint8_t)i;
         rc = fcb_write(&fcb, &small_record, 1);
