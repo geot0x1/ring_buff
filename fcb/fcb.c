@@ -1343,15 +1343,48 @@ bool fcb_is_full(const fcb_t *fcb)
 
     fcb_lock((fcb_t *)fcb);
 
-    /* Check if we have enough space for a maximum-sized record.
-     * This ensures is_full() returns true when write() would fail for
-     * the typical use case (writing large records).
-     */
-    uint32_t space = free_space(fcb);
-    uint32_t max_record_needed = FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE;
+    uint32_t tail_remain = remaining_in_sector(fcb, fcb->tail_offset);
+    uint8_t ns = next_sector(fcb, fcb->tail_sector);
 
+    /* Case 1: Can fit a max-size record in current sector. Definitely not full. */
+    if (tail_remain >= FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE)
+    {
+        fcb_unlock((fcb_t *)fcb);
+        return false;
+    }
+
+    /* Case 2: Check if the next sector is available for writing. */
+    
+    /* If next sector is head sector (collision), we're blocked. */
+    if (ns == fcb->head_sector && fcb->tail_sector != fcb->head_sector)
+    {
+        fcb_unlock((fcb_t *)fcb);
+        return true;  /* Blocked by head - full. */
+    }
+
+    /* Read next  sector's header to determine if it's in use. */
+    fcb_sector_hdr_t shdr;
+    int rc = read_sector_header(fcb, ns, &shdr);
+    
+    if (rc != FCB_OK)
+    {
+        /* Can't read - assume full for safety. */
+        fcb_unlock((fcb_t *)fcb);
+        return true;
+    }
+
+    /* If next sector has valid header, it's in use. We can't write to it. */
+    if (shdr.magic == FCB_SECTOR_MAGIC && shdr.status == FCB_SECTOR_STATUS_VALID)
+    {
+        /* Next sector is in use. Even if we have a little space left in current sector
+         * (< max record size), we're still effectively full because we can't span/move. */
+        fcb_unlock((fcb_t *)fcb);
+        return true;  /* Full - can't move and can't span. */
+    }
+
+    /* Next sector is available. We can write at least a minimal record. */
     fcb_unlock((fcb_t *)fcb);
-    return (space < max_record_needed);
+    return false;
 }
 
 /* ================================================================== */
