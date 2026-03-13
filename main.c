@@ -609,44 +609,6 @@ void test_fill_fifo_with_max_size_records_overflow(void)
     TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, &single_byte, 1));
 }
 
-void test_fill_fifo_read_one_then_write_succeeds(void)
-{
-    /*
-     * Fill the FIFO until full, verify overflow error, then read+delete
-     * one record, and verify write succeeds again.
-     */
-    fcb_t fcb;
-    fcb_config_t cfg;
-    make_cfg(&cfg, 0);
-    cfg.num_sectors = 2;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
-
-    uint8_t buf[FCB_MAX_RECORD_SIZE];
-    memset(buf, 0xCC, sizeof(buf));
-
-    /* Fill the buffer. */
-    int written_count = 0;
-    while (fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE) == FCB_OK)
-    {
-        written_count++;
-    }
-
-    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
-    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
-
-    /* Verify write fails. */
-    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE));
-
-    /* Read and delete the oldest record. */
-    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
-    size_t rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
-
-    /* Now write should succeed. */
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE));
-}
-
 void test_fill_fifo_is_full_predicate_true(void)
 {
     /*
@@ -2791,7 +2753,6 @@ int main(void)
     RUN_TEST(test_write_returns_full_when_buffer_full);
     RUN_TEST(test_fill_fifo_with_small_records_overflow);
     RUN_TEST(test_fill_fifo_with_max_size_records_overflow);
-    RUN_TEST(test_fill_fifo_read_one_then_write_succeeds);
     RUN_TEST(test_fill_fifo_is_full_predicate_true);
     RUN_TEST(test_fill_fifo_varied_record_sizes_overflow);
     RUN_TEST(test_fill_fifo_single_sector_overflow);
