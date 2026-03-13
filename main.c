@@ -22,6 +22,8 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <windows.h>
+#include <time.h>
 
 /* ================================================================== */
 /*  Flash adapter callbacks                                            */
@@ -2152,6 +2154,290 @@ void test_variable_length_boundary_values(void)
 }
 
 /* ================================================================== */
+/*  --- Threaded write/read tests ---                                 */
+/* ================================================================== */
+
+/**
+ * Simple linear congruential generator for reproducible randomness.
+ * Not cryptographically secure, but deterministic and lightweight.
+ */
+static uint32_t g_rng_seed = 0x12345678U;
+
+static uint32_t simple_rand(void)
+{
+    g_rng_seed = g_rng_seed * 1103515245U + 12345U;
+    return (g_rng_seed / 65536U) % 32768U;
+}
+
+/**
+ * Queue entry to track written records: data + length for verification.
+ */
+typedef struct {
+    uint8_t data[256];
+    size_t  len;
+} queue_entry_t;
+
+#define QUEUE_MAX 100
+static queue_entry_t g_queue[QUEUE_MAX];
+static int g_queue_head = 0;
+static int g_queue_tail = 0;
+static int g_queue_count = 0;
+
+static void queue_push(const uint8_t *data, size_t len)
+{
+    TEST_ASSERT_TRUE(g_queue_count < QUEUE_MAX);
+    memcpy(g_queue[g_queue_tail].data, data, len);
+    g_queue[g_queue_tail].len = len;
+    g_queue_tail = (g_queue_tail + 1) % QUEUE_MAX;
+    g_queue_count++;
+}
+
+static int queue_pop(uint8_t *data, size_t *len)
+{
+    if (g_queue_count == 0)
+        return 0;
+    memcpy(data, g_queue[g_queue_head].data, g_queue[g_queue_head].len);
+    *len = g_queue[g_queue_head].len;
+    g_queue_head = (g_queue_head + 1) % QUEUE_MAX;
+    g_queue_count--;
+    return 1;
+}
+
+/**
+ * Shared state for writer and reader threads.
+ */
+typedef struct {
+    fcb_t *fcb;
+    int    write_count;
+    int    read_count;
+    int    stop_flag;
+    int    write_error;
+    int    read_error;
+} thread_state_t;
+
+/**
+ * Writer thread: generates random-length data with random delays,
+ * writes to FCB, and tracks written data in queue.
+ */
+static DWORD WINAPI writer_thread_func(LPVOID arg)
+{
+    thread_state_t *ts = (thread_state_t *)arg;
+    uint8_t wbuf[256];
+
+    for (int i = 0; i < 15 && !ts->stop_flag; i++)
+    {
+        /* Random data length: 1-64 bytes (conservative to prevent buffer overflow) */
+        size_t len = 1 + (simple_rand() % 64);
+
+        /* Fill buffer with pseudo-random data */
+        for (size_t j = 0; j < len; j++)
+        {
+            wbuf[j] = (uint8_t)simple_rand();
+        }
+
+        /* Track in queue BEFORE writing to FCB to avoid reader race condition */
+        queue_push(wbuf, len);
+
+        /* Write to FCB */
+        int rc = fcb_write(ts->fcb, wbuf, len);
+        if (rc != FCB_OK)
+        {
+            ts->write_error = rc;
+            break;
+        }
+
+        ts->write_count++;
+
+        /* Small delay between writes to allow reader to catch up: 3-6 milliseconds */
+        int delay_ms = 3 + (simple_rand() % 4);
+        Sleep(delay_ms);
+    }
+
+    return 0;
+}
+
+/**
+ * Reader thread: reads from FCB and verifies data matches queue.
+ */
+static DWORD WINAPI reader_thread_func(LPVOID arg)
+{
+    thread_state_t *ts = (thread_state_t *)arg;
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t  rlen = 0;
+    int retry_count = 0;
+
+    /* Wait a bit for writer to start generating data */
+    Sleep(50);
+
+    while (ts->read_count < ts->write_count || (!ts->stop_flag && ts->read_count < 15))
+    {
+        int rc = fcb_read(ts->fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen);
+
+        if (rc == FCB_EMPTY)
+        {
+            /* No data yet, wait and retry */
+            retry_count++;
+            if (retry_count > 200)  /* ~1 second max wait */
+            {
+                ts->read_error = -4;  /* timeout */
+                break;
+            }
+            Sleep(5);
+            continue;
+        }
+
+        retry_count = 0;
+
+        if (rc != FCB_OK)
+        {
+            ts->read_error = rc;
+            break;
+        }
+
+        /* Verify data matches queue */
+        uint8_t expected[256];
+        size_t expected_len = 0;
+        if (!queue_pop(expected, &expected_len))
+        {
+            ts->read_error = -1;  /* queue underrun */
+            break;
+        }
+
+        if (rlen != expected_len)
+        {
+            ts->read_error = -2;  /* length mismatch */
+            break;
+        }
+
+        if (memcmp(rbuf, expected, rlen) != 0)
+        {
+            ts->read_error = -3;  /* data mismatch */
+            break;
+        }
+
+        /* Delete the read record */
+        rc = fcb_delete(ts->fcb);
+        if (rc != FCB_OK)
+        {
+            ts->read_error = rc;
+            break;
+        }
+
+        ts->read_count++;
+    }
+
+    return 0;
+}
+
+/**
+ * Threaded test: concurrent writer and reader verify FIFO order.
+ */
+void test_threaded_concurrent_write_read_fifo_order(void)
+{
+    fcb_t fcb;
+    init_fcb(&fcb, 1);  /* Enable mutex callbacks */
+
+    /* Reset queue and RNG */
+    g_queue_head = 0;
+    g_queue_tail = 0;
+    g_queue_count = 0;
+    g_rng_seed = 0xDEADBEEFU;
+
+    /* Initialize thread state */
+    thread_state_t ts = {
+        .fcb         = &fcb,
+        .write_count = 0,
+        .read_count  = 0,
+        .stop_flag   = 0,
+        .write_error = 0,
+        .read_error  = 0,
+    };
+
+    /* Launch writer and reader threads */
+    HANDLE writer = CreateThread(NULL, 0, writer_thread_func, &ts, 0, NULL);
+    HANDLE reader = CreateThread(NULL, 0, reader_thread_func, &ts, 0, NULL);
+
+    TEST_ASSERT_NOT_NULL(writer);
+    TEST_ASSERT_NOT_NULL(reader);
+
+    /* Wait for both threads to complete */
+    TEST_ASSERT_EQUAL_INT(WAIT_OBJECT_0, WaitForSingleObject(writer, 30000));
+    TEST_ASSERT_EQUAL_INT(WAIT_OBJECT_0, WaitForSingleObject(reader, 30000));
+
+    CloseHandle(writer);
+    CloseHandle(reader);
+
+    /* Set stop flag to allow reader to finish if still running */
+    ts.stop_flag = 1;
+
+    /* Verify no errors occurred */
+    TEST_ASSERT_EQUAL_INT(0, ts.write_error);
+    TEST_ASSERT_EQUAL_INT(0, ts.read_error);
+
+    /* Verify we processed all written records */
+    TEST_ASSERT_EQUAL_INT(ts.write_count, ts.read_count);
+    TEST_ASSERT_GREATER_THAN_INT(0, ts.write_count);
+
+    /* Verify queue is empty (all records consumed) */
+    TEST_ASSERT_EQUAL_INT(0, g_queue_count);
+
+    /* Verify FCB is now empty */
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+/**
+ * Threaded test: rapid writes with delayed reads (backpressure scenario).
+ * Uses same logic as first threaded test but with different random seed.
+ */
+void test_threaded_rapid_write_delayed_read(void)
+{
+    fcb_t fcb;
+    init_fcb(&fcb, 1);
+
+    g_queue_head = 0;
+    g_queue_tail = 0;
+    g_queue_count = 0;
+    g_rng_seed = 0x98765432U;  /* Different seed for different data pattern */
+
+    thread_state_t ts = {
+        .fcb         = &fcb,
+        .write_count = 0,
+        .read_count  = 0,
+        .stop_flag   = 0,
+        .write_error = 0,
+        .read_error  = 0,
+    };
+
+    HANDLE writer = CreateThread(NULL, 0, writer_thread_func, &ts, 0, NULL);
+    HANDLE reader = CreateThread(NULL, 0, reader_thread_func, &ts, 0, NULL);
+
+    TEST_ASSERT_NOT_NULL(writer);
+    TEST_ASSERT_NOT_NULL(reader);
+
+    TEST_ASSERT_EQUAL_INT(WAIT_OBJECT_0, WaitForSingleObject(writer, 30000));
+    TEST_ASSERT_EQUAL_INT(WAIT_OBJECT_0, WaitForSingleObject(reader, 30000));
+
+    CloseHandle(writer);
+    CloseHandle(reader);
+
+    ts.stop_flag = 1;
+
+    /* Verify no errors occurred */
+    TEST_ASSERT_EQUAL_INT(0, ts.write_error);
+    TEST_ASSERT_EQUAL_INT(0, ts.read_error);
+    
+    /* Verify we processed all written records */
+    TEST_ASSERT_EQUAL_INT(ts.write_count, ts.read_count);
+    TEST_ASSERT_GREATER_THAN_INT(0, ts.write_count);
+    
+    /* Verify queue is empty (all records consumed) */
+    TEST_ASSERT_EQUAL_INT(0, g_queue_count);
+    
+    /* Verify FCB is now empty */
+    TEST_ASSERT_TRUE(fcb_is_empty(&fcb));
+}
+
+/* ================================================================== */
 /*  Main — Unity test runner                                           */
 /* ================================================================== */
 
@@ -2283,6 +2569,10 @@ int main(void)
 
     /* Minimum 2-sector config */
     RUN_TEST(test_two_sector_minimum_lifecycle);
+
+    /* Threaded concurrent operations */
+    RUN_TEST(test_threaded_concurrent_write_read_fifo_order);
+    RUN_TEST(test_threaded_rapid_write_delayed_read);
 
     return UNITY_END();
 }
