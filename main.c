@@ -113,7 +113,10 @@ void setUp(void)
     g_unlock_count = 0;
 }
 
-void tearDown(void) {}
+void tearDown(void)
+{
+}
+
 
 /* ================================================================== */
 /*  --- fcb_init tests ---                                             */
