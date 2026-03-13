@@ -1200,8 +1200,10 @@ int fcb_delete(fcb_t *fcb)
 
     if (!is_valid_record_header(&rhdr))
     {
+        /* A corrupted/invalid header at the head means there is no
+         * well-formed record to delete — treat as empty.              */
         fcb_unlock(fcb);
-        return FCB_CORRUPTED;
+        return FCB_EMPTY;
     }
 
     /* -------------------------------------------------------------- */
