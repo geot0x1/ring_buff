@@ -228,7 +228,7 @@ void test_init_recovery_after_write(void)
 
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
     TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
 }
@@ -304,7 +304,7 @@ void test_read_null_fcb(void)
 {
     uint8_t buf[FCB_MAX_RECORD_SIZE];
     size_t  len = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(NULL, buf, &len));
+    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(NULL, buf, FCB_MAX_RECORD_SIZE, &len));
 }
 
 void test_read_null_buf(void)
@@ -312,7 +312,7 @@ void test_read_null_buf(void)
     fcb_t fcb;
     init_fcb(&fcb, 0);
     size_t len = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, NULL, &len));
+    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, NULL, FCB_MAX_RECORD_SIZE, &len));
 }
 
 void test_read_null_len_out(void)
@@ -320,7 +320,7 @@ void test_read_null_len_out(void)
     fcb_t fcb;
     init_fcb(&fcb, 0);
     uint8_t buf[FCB_MAX_RECORD_SIZE];
-    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, buf, NULL));
+    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, buf, FCB_MAX_RECORD_SIZE, NULL));
 }
 
 void test_read_empty_buffer_returns_empty(void)
@@ -329,7 +329,7 @@ void test_read_empty_buffer_returns_empty(void)
     init_fcb(&fcb, 0);
     uint8_t buf[FCB_MAX_RECORD_SIZE];
     size_t  len = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_read(&fcb, buf, &len));
+    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_read(&fcb, buf, FCB_MAX_RECORD_SIZE, &len));
 }
 
 void test_read_single_record_correct_data(void)
@@ -346,7 +346,7 @@ void test_read_single_record_correct_data(void)
 
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
     TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
 }
@@ -363,8 +363,8 @@ void test_read_is_nondestructive(void)
 
     uint8_t rbuf1[FCB_MAX_RECORD_SIZE], rbuf2[FCB_MAX_RECORD_SIZE];
     size_t  len1 = 0, len2 = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf1, &len1));
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf2, &len2));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf1, FCB_MAX_RECORD_SIZE, &len1));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf2, FCB_MAX_RECORD_SIZE, &len2));
     TEST_ASSERT_EQUAL_size_t(len1, len2);
     TEST_ASSERT_EQUAL_MEMORY(rbuf1, rbuf2, len1);
 }
@@ -384,7 +384,7 @@ void test_read_fifo_order(void)
     {
         uint8_t rbuf[FCB_MAX_RECORD_SIZE];
         size_t  rlen = 0;
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(1, rlen);
         TEST_ASSERT_EQUAL_UINT8(expected, rbuf[0]);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -448,7 +448,7 @@ void test_delete_advances_head_to_next_record(void)
 
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(1, rlen);
     TEST_ASSERT_EQUAL_UINT8(0x22, rbuf[0]);
 }
@@ -548,7 +548,7 @@ void test_read_detects_crc_mismatch(void)
 
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_CORRUPTED, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_CORRUPTED, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
 }
 
 void test_delete_treats_invalid_header_as_empty(void)
@@ -690,7 +690,7 @@ void test_spanning_record_write_and_read(void)
 
     for (int i = 0; i < 63; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
@@ -698,7 +698,7 @@ void test_spanning_record_write_and_read(void)
     /* Read the spanning record and verify its payload. */
     memset(rbuf, 0, sizeof(rbuf));
     rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
     TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
 }
@@ -756,7 +756,7 @@ void test_spanning_full_lifecycle_with_discard(void)
     {
         uint8_t rbuf[FCB_MAX_RECORD_SIZE];
         size_t  rlen = 0;
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -792,7 +792,7 @@ void test_lock_unlock_called_on_read(void)
     g_lock_count = g_unlock_count = 0;
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
 
     TEST_ASSERT_GREATER_THAN_INT(0, g_lock_count);
     TEST_ASSERT_EQUAL_INT(g_lock_count, g_unlock_count);
@@ -849,7 +849,7 @@ void test_lock_unlock_balanced_on_error_path(void)
     g_lock_count = g_unlock_count = 0;
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_INT(g_lock_count, g_unlock_count);
 
     g_lock_count = g_unlock_count = 0;
@@ -884,7 +884,7 @@ void test_recovery_skips_consumed_records(void)
     /* Only the third (unconsumed) record should be readable. */
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(1, rlen);
     TEST_ASSERT_EQUAL_UINT8(0x33, rbuf[0]);
 
@@ -920,7 +920,7 @@ void test_recovery_spanning_record_survives(void)
     for (int i = 0; i < 64; i++)
     {
         memset(wbuf, (uint8_t)i, sizeof(wbuf));
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb2));
@@ -967,12 +967,12 @@ void test_recovery_truncates_partial_write(void)
     /* The two good records must survive. */
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(sizeof(w1), rlen);
     TEST_ASSERT_EQUAL_MEMORY(w1, rbuf, rlen);
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb2));
 
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(sizeof(w2), rlen);
     TEST_ASSERT_EQUAL_MEMORY(w2, rbuf, rlen);
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb2));
@@ -982,7 +982,7 @@ void test_recovery_truncates_partial_write(void)
      * When head catches up to tail, the FCB sees a header with valid
      * magic + length but the data CRC fails → FCB_CORRUPTED.
      */
-    TEST_ASSERT_EQUAL_INT(FCB_CORRUPTED, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_CORRUPTED, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
 }
 
 void test_recovery_empty_after_all_deleted(void)
@@ -1030,14 +1030,14 @@ void test_recovery_then_continue_appending(void)
     /* First record is still the oldest. */
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(1, rlen);
     TEST_ASSERT_EQUAL_UINT8(0xAA, rbuf[0]);
 
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb2));
 
     /* Second record comes next. */
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb2, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(1, rlen);
     TEST_ASSERT_EQUAL_UINT8(0xBB, rbuf[0]);
 }
@@ -1114,7 +1114,7 @@ void test_circular_wrap_write_discard_reuse(void)
     for (int i = 0; i < count; i++)
     {
         memset(wbuf, (uint8_t)(i + 200), sizeof(wbuf));
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -1158,7 +1158,7 @@ void test_interleaved_write_read_telemetry_pattern(void)
         for (int r = 0; r < batch_read && read_seq < write_seq; r++)
         {
             memset(wbuf, read_seq, sizeof(wbuf));
-            TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+            TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
             TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
             TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
             TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -1170,7 +1170,7 @@ void test_interleaved_write_read_telemetry_pattern(void)
     while (read_seq < write_seq)
     {
         memset(wbuf, read_seq, sizeof(wbuf));
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -1201,7 +1201,7 @@ void test_write_only_then_bulk_read(void)
     for (int i = 0; i < 100; i++)
     {
         memset(wbuf, (uint8_t)i, sizeof(wbuf));
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -1228,7 +1228,7 @@ void test_read_uninitialised_fcb(void)
     memset(&fcb, 0, sizeof(fcb));
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
 }
 
 void test_delete_uninitialised_fcb(void)
@@ -1274,7 +1274,7 @@ void test_write_read_all_0xff_payload(void)
 
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
     TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
 }
@@ -1300,7 +1300,7 @@ void test_mixed_record_sizes(void)
         uint8_t expected[FCB_MAX_RECORD_SIZE];
         size_t  rlen = 0;
         memset(expected, (uint8_t)(i + 0x10), sizes[i]);
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(sizes[i], rlen);
         TEST_ASSERT_EQUAL_MEMORY(expected, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
@@ -1439,7 +1439,7 @@ void test_write_after_discard_reclaims_space(void)
     /* Verify the record reads back correctly. */
     uint8_t rbuf[FCB_MAX_RECORD_SIZE];
     size_t  rlen = 0;
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
     TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
 }
@@ -1477,7 +1477,7 @@ void test_reset_recovery_with_unread_records(void)
     for (int i = 0; i < record_count; i++)
     {
         memset(wbuf, (uint8_t)(i + 0x10), sizeof(wbuf));
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
@@ -1512,7 +1512,7 @@ void test_reset_recovery_with_partially_consumed_data(void)
     size_t  rlen = 0;
     for (int i = 0; i < consumed_count; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
 
@@ -1524,7 +1524,7 @@ void test_reset_recovery_with_partially_consumed_data(void)
 
     /* Verify first next record is record #5 (not 0-4). */
     memset(wbuf, (uint8_t)(consumed_count + 0x20), sizeof(wbuf));
-    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
     TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
     TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
     TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
@@ -1533,7 +1533,7 @@ void test_reset_recovery_with_partially_consumed_data(void)
     for (int i = consumed_count + 1; i < total_records; i++)
     {
         memset(wbuf, (uint8_t)(i + 0x20), sizeof(wbuf));
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
@@ -1565,7 +1565,7 @@ void test_reset_recovery_with_mixed_operations(void)
     /* Delete first 3 records. */
     for (int i = 0; i < 3; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
 
@@ -1577,7 +1577,7 @@ void test_reset_recovery_with_mixed_operations(void)
 
     /* Verify records 3-9 are still present and readable (7 records). */
     int count = 0;
-    while (fcb_read(&fcb_after_reset, rbuf, &rlen) == FCB_OK)
+    while (fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen) == FCB_OK)
     {
         /* Records should be 0x33-0x39 */
         TEST_ASSERT_TRUE(rbuf[0] >= 0x33 && rbuf[0] <= 0x39);
@@ -1624,7 +1624,7 @@ void test_reset_recovery_with_spanning_records(void)
     size_t  rlen = 0;
     for (int i = 0; i < 64; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(FCB_MAX_RECORD_SIZE, rlen);
         TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
@@ -1670,7 +1670,7 @@ void test_reset_recovery_with_multiple_sectors(void)
     int consume_count = 0;
     for (int i = 0; i < 10 && i < write_count; i++)
     {
-        if (fcb_read(&fcb, rbuf, &rlen) == FCB_OK)
+        if (fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen) == FCB_OK)
         {
             fcb_delete(&fcb);
             consume_count++;
@@ -1689,7 +1689,7 @@ void test_reset_recovery_with_multiple_sectors(void)
     /* Drain all records from the buffer. */
     int total_read = 0;
     int delete_errors = 0;
-    while (fcb_read(&fcb_after_reset, rbuf, &rlen) == FCB_OK)
+    while (fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen) == FCB_OK)
     {
         total_read++;
         if (fcb_delete(&fcb_after_reset) != FCB_OK)
@@ -1743,7 +1743,7 @@ void test_reset_recovery_preserves_record_integrity(void)
     size_t  rlen = 0;
     for (int i = 0; i < num_records; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(sizeof(patterns[i]), rlen);
         TEST_ASSERT_EQUAL_MEMORY(patterns[i], rbuf, rlen);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
@@ -1775,7 +1775,7 @@ void test_reset_recovery_after_partial_deletion_sequence(void)
     /* Delete first 4 records sequentially. */
     for (int i = 0; i < 4; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
 
@@ -1790,7 +1790,7 @@ void test_reset_recovery_after_partial_deletion_sequence(void)
     uint8_t expected_min = 0x54; /* record 4 */
     uint8_t expected_max = 0x59; /* record 9 */
     
-    while (fcb_read(&fcb_after_reset, rbuf, &rlen) == FCB_OK)
+    while (fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen) == FCB_OK)
     {
         TEST_ASSERT_TRUE(rbuf[0] >= expected_min && rbuf[0] <= expected_max);
         count++;
@@ -1823,7 +1823,7 @@ void test_reset_recovery_fifo_order_maintained(void)
     /* Delete first 10 records. */
     for (int i = 0; i < 10; i++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
     }
 
@@ -1836,7 +1836,7 @@ void test_reset_recovery_fifo_order_maintained(void)
     /* Verify records 11-20 are readable in order. */
     for (uint8_t expected = 11; expected <= 20; expected++)
     {
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb_after_reset, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_UINT8(expected, rbuf[0]);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb_after_reset));
     }
@@ -1866,7 +1866,7 @@ void test_two_sector_minimum_lifecycle(void)
     {
         uint8_t rbuf[FCB_MAX_RECORD_SIZE];
         size_t  rlen = 0;
-        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, &rlen));
+        TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
         TEST_ASSERT_EQUAL_size_t(1, rlen);
         TEST_ASSERT_EQUAL_UINT8((uint8_t)i, rbuf[0]);
         TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
