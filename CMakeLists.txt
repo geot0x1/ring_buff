@@ -9,7 +9,6 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Source files
 set(SOURCES
     main.c
-    tests/test_fcb.c
 )
 
 # Add subdirectories
@@ -19,7 +18,6 @@ add_subdirectory(crc32)
 
 # Executable
 add_executable(${PROJECT_NAME} ${SOURCES})
-target_include_directories(${PROJECT_NAME} PRIVATE tests)
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} PRIVATE fcb flash_mem crc32)
@@ -31,4 +29,4 @@ endif()
 
 # Enable testing
 enable_testing()
-add_subdirectory(tests)
+

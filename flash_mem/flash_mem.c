@@ -9,7 +9,7 @@ void flash_init(void) {
   memset(fcb_flash, 0xFF, FLASH_SIZE);
 }
 
-int flash_write(uint32_t addr, const void *data, uint16_t len) {
+int flash_write(uint32_t addr, const void *data, uint32_t len) {
   if (addr + len > FLASH_SIZE) {
     return -1; // Out of bounds
   }
@@ -22,7 +22,7 @@ int flash_write(uint32_t addr, const void *data, uint16_t len) {
   return 0; // Success
 }
 
-int flash_read(uint32_t addr, void *data, uint16_t size) {
+int flash_read(uint32_t addr, void *data, uint32_t size) {
   if (addr + size > FLASH_SIZE) {
     return -1; // Out of bounds
   }
