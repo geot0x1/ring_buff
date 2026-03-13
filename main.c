@@ -518,6 +518,299 @@ void test_write_returns_full_when_buffer_full(void)
     TEST_ASSERT_FALSE(fcb_is_empty(&fcb));
 }
 
+/* ================================================================== */
+/*  --- FIFO Full Overflow Tests ---                                  */
+/* ================================================================== */
+
+void test_fill_fifo_with_small_records_overflow(void)
+{
+    /*
+     * Fill the FIFO with small (1-byte) records on a 2-sector config
+     * until full, then verify the next write returns FCB_FULL.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t small_record = 0xAA;
+    int written_count = 0;
+    int rc;
+
+    /* Write small records until full. */
+    for (int i = 0; i < 10000; i++)
+    {
+        small_record = (uint8_t)i;
+        rc = fcb_write(&fcb, &small_record, 1);
+        if (rc == FCB_OK)
+        {
+            written_count++;
+        }
+        else if (rc == FCB_FULL)
+        {
+            break;
+        }
+        else
+        {
+            TEST_FAIL_MESSAGE("Unexpected error code on write");
+        }
+    }
+
+    /* Verify FIFO is indeed full. */
+    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+
+    /* Try to write one more small record — must fail with FCB_FULL. */
+    small_record = 0xFF;
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, &small_record, 1));
+
+    /* Try again with different data — should still be full. */
+    small_record = 0x00;
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, &small_record, 1));
+}
+
+void test_fill_fifo_with_max_size_records_overflow(void)
+{
+    /*
+     * Fill the FIFO with 1024-byte (max size) records on a 2-sector
+     * config until full, then verify overflow error.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t max_buf[FCB_MAX_RECORD_SIZE];
+    memset(max_buf, 0xBB, sizeof(max_buf));
+    int written_count = 0;
+
+    /* Write max-size records until full. */
+    while (fcb_write(&fcb, max_buf, FCB_MAX_RECORD_SIZE) == FCB_OK)
+    {
+        written_count++;
+    }
+
+    /* Verify at least one record was written. */
+    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+
+    /* Try to write another max-size record — must return FCB_FULL. */
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, max_buf, FCB_MAX_RECORD_SIZE));
+
+    /* Try with a single-byte record — should also return FCB_FULL. */
+    uint8_t single_byte = 0x42;
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, &single_byte, 1));
+}
+
+void test_fill_fifo_read_one_then_write_succeeds(void)
+{
+    /*
+     * Fill the FIFO until full, verify overflow error, then read+delete
+     * one record, and verify write succeeds again.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t buf[FCB_MAX_RECORD_SIZE];
+    memset(buf, 0xCC, sizeof(buf));
+
+    /* Fill the buffer. */
+    int written_count = 0;
+    while (fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE) == FCB_OK)
+    {
+        written_count++;
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+
+    /* Verify write fails. */
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE));
+
+    /* Read and delete the oldest record. */
+    uint8_t rbuf[FCB_MAX_RECORD_SIZE];
+    size_t rlen = 0;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, FCB_MAX_RECORD_SIZE, &rlen));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_delete(&fcb));
+
+    /* Now write should succeed. */
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE));
+}
+
+void test_fill_fifo_is_full_predicate_true(void)
+{
+    /*
+     * Fill the FIFO and verify that fcb_is_full() returns true
+     * when attempting to write would fail.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t buf[FCB_MAX_RECORD_SIZE];
+    memset(buf, 0xDD, sizeof(buf));
+
+    /* Initially not full. */
+    TEST_ASSERT_FALSE(fcb_is_full(&fcb));
+
+    /* Write records until full. */
+    while (fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE) == FCB_OK)
+    {
+        /* keep going */
+    }
+
+    /* Now must be full. */
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+
+    /* And write must still fail. */
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE));
+}
+
+void test_fill_fifo_varied_record_sizes_overflow(void)
+{
+    /*
+     * Fill the FIFO with records of varied sizes (small, medium, large)
+     * until full, then verify overflow error occurs.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t buf[FCB_MAX_RECORD_SIZE];
+    const size_t sizes[] = {1, 10, 100, 500, 1024};
+    int size_index = 0;
+    int written_count = 0;
+
+    /* Write records with varied sizes until full. */
+    while (written_count < 500)
+    {
+        size_t current_size = sizes[size_index % (sizeof(sizes) / sizeof(sizes[0]))];
+        memset(buf, (uint8_t)(written_count & 0xFF), current_size);
+
+        int rc = fcb_write(&fcb, buf, current_size);
+        if (rc == FCB_OK)
+        {
+            written_count++;
+            size_index++;
+        }
+        else if (rc == FCB_FULL)
+        {
+            break;
+        }
+        else
+        {
+            TEST_FAIL_MESSAGE("Unexpected error on write");
+        }
+    }
+
+    /* Verify FIFO is full. */
+    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+
+    /* Try various record sizes — all should fail with FCB_FULL. */
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
+    {
+        memset(buf, 0xEE, sizes[i]);
+        TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, buf, sizes[i]));
+    }
+}
+
+void test_fill_fifo_single_sector_overflow(void)
+{
+    /*
+     * Test overflow behavior with a minimal 1-sector configuration.
+     * Fill the single sector until full and verify overflow errors.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 1;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t buf[FCB_MAX_RECORD_SIZE];
+    memset(buf, 0xFF, sizeof(buf));
+    int written_count = 0;
+
+    /* Write records until full (should happen relatively quickly with 1 sector). */
+    while (fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE) == FCB_OK)
+    {
+        written_count++;
+    }
+
+    /* Verify at least one record was written. */
+    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
+    TEST_ASSERT_TRUE(fcb_is_full(&fcb));
+
+    /* Subsequent writes should fail. */
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, buf, FCB_MAX_RECORD_SIZE));
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, buf, 1));
+}
+
+void test_fill_fifo_with_pattern_verify_overflow(void)
+{
+    /*
+     * Fill the FIFO with records containing a recognizable pattern,
+     * verify overflow, read some records to verify data integrity,
+     * and confirm overflow continues.
+     */
+    fcb_t fcb;
+    fcb_config_t cfg;
+    make_cfg(&cfg, 0);
+    cfg.num_sectors = 2;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_init(&fcb, &cfg));
+
+    uint8_t wbuf[256];
+    int written_count = 0;
+
+    /* Fill with a recognizable pattern per record. */
+    for (int i = 0; i < 500; i++)
+    {
+        for (int j = 0; j < 256; j++)
+        {
+            wbuf[j] = (uint8_t)((i + j) & 0xFF);
+        }
+
+        int rc = fcb_write(&fcb, wbuf, sizeof(wbuf));
+        if (rc == FCB_OK)
+        {
+            written_count++;
+        }
+        else if (rc == FCB_FULL)
+        {
+            break;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT(0, written_count);
+
+    /* Verify overflow on write. */
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+
+    /* Read a record and verify content is correct. */
+    uint8_t rbuf[256];
+    size_t rlen = 0;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, sizeof(wbuf), &rlen));
+    TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
+
+    /* Pattern should match the first written record. */
+    for (int j = 0; j < 256; j++)
+    {
+        TEST_ASSERT_EQUAL_UINT8((uint8_t)j, rbuf[j]);
+    }
+
+    /* Still full — write should fail. */
+    TEST_ASSERT_EQUAL_INT(FCB_FULL, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+}
+
 void test_is_full_on_uninitialised_fcb_returns_true(void)
 {
     fcb_t fcb;
@@ -2491,6 +2784,13 @@ int main(void)
     RUN_TEST(test_is_empty_on_uninitialised_fcb_returns_true);
     RUN_TEST(test_empty_after_all_records_deleted);
     RUN_TEST(test_write_returns_full_when_buffer_full);
+    RUN_TEST(test_fill_fifo_with_small_records_overflow);
+    RUN_TEST(test_fill_fifo_with_max_size_records_overflow);
+    RUN_TEST(test_fill_fifo_read_one_then_write_succeeds);
+    RUN_TEST(test_fill_fifo_is_full_predicate_true);
+    RUN_TEST(test_fill_fifo_varied_record_sizes_overflow);
+    RUN_TEST(test_fill_fifo_single_sector_overflow);
+    RUN_TEST(test_fill_fifo_with_pattern_verify_overflow);
     RUN_TEST(test_read_detects_crc_mismatch);
     RUN_TEST(test_delete_treats_invalid_header_as_empty);
     RUN_TEST(test_discard_on_no_valid_sectors_returns_empty);

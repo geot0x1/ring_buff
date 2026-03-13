@@ -1341,9 +1341,14 @@ bool fcb_is_full(const fcb_t *fcb)
         return true;  /* treat uninitialised as full for safety */
     }
 
+    fcb_lock((fcb_t *)fcb);
+
     /* A minimal record is header (12) + 1 byte of data = 13 bytes. */
     uint32_t space = free_space(fcb);
-    return (space < FCB_RECORD_HDR_SIZE + 1);
+    bool is_full = (space < FCB_RECORD_HDR_SIZE + 1);
+
+    fcb_unlock((fcb_t *)fcb);
+    return is_full;
 }
 
 /* ================================================================== */
@@ -1357,7 +1362,10 @@ bool fcb_is_empty(const fcb_t *fcb)
         return true;  /* treat uninitialised as empty for safety */
     }
 
+    fcb_lock((fcb_t *)fcb);
+
     /* Empty when head == tail and no valid unconsumed record at head. */
+    bool result = false;
     if (fcb->head_sector == fcb->tail_sector &&
         fcb->head_offset == fcb->tail_offset)
     {
@@ -1367,15 +1375,23 @@ bool fcb_is_empty(const fcb_t *fcb)
                                     sizeof(fcb_record_hdr_t));
         if (rc != FCB_OK)
         {
-            return true;
+            result = true;
         }
-        if (!is_valid_record_header(&rhdr) ||
-            rhdr.consumed == FCB_RECORD_CONSUMED)
+        else if (!is_valid_record_header(&rhdr) ||
+                 rhdr.consumed == FCB_RECORD_CONSUMED)
         {
-            return true;
+            result = true;
         }
-        return false;
+        else
+        {
+            result = false;
+        }
+    }
+    else
+    {
+        result = false;
     }
 
-    return false;
+    fcb_unlock((fcb_t *)fcb);
+    return result;
 }
