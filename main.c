@@ -55,9 +55,13 @@ static int flash_erase_cb(void *ctx, uint32_t addr)
 static int g_lock_count;
 static int g_unlock_count;
 
+static CRITICAL_SECTION g_fcb_cs;
+static CRITICAL_SECTION g_queue_cs;
+
 static void counting_lock(void *ctx)
 {
     (void)ctx;
+    EnterCriticalSection(&g_fcb_cs);
     g_lock_count++;
 }
 
@@ -65,6 +69,7 @@ static void counting_unlock(void *ctx)
 {
     (void)ctx;
     g_unlock_count++;
+    LeaveCriticalSection(&g_fcb_cs);
 }
 
 /* ================================================================== */
@@ -2445,21 +2450,28 @@ static int g_queue_count = 0;
 
 static void queue_push(const uint8_t *data, size_t len)
 {
+    EnterCriticalSection(&g_queue_cs);
     TEST_ASSERT_TRUE(g_queue_count < QUEUE_MAX);
     memcpy(g_queue[g_queue_tail].data, data, len);
     g_queue[g_queue_tail].len = len;
     g_queue_tail = (g_queue_tail + 1) % QUEUE_MAX;
     g_queue_count++;
+    LeaveCriticalSection(&g_queue_cs);
 }
 
 static int queue_pop(uint8_t *data, size_t *len)
 {
+    EnterCriticalSection(&g_queue_cs);
     if (g_queue_count == 0)
+    {
+        LeaveCriticalSection(&g_queue_cs);
         return 0;
+    }
     memcpy(data, g_queue[g_queue_head].data, g_queue[g_queue_head].len);
     *len = g_queue[g_queue_head].len;
     g_queue_head = (g_queue_head + 1) % QUEUE_MAX;
     g_queue_count--;
+    LeaveCriticalSection(&g_queue_cs);
     return 1;
 }
 
@@ -2703,6 +2715,9 @@ void test_threaded_rapid_write_delayed_read(void)
 
 int main(void)
 {
+    InitializeCriticalSection(&g_fcb_cs);
+    InitializeCriticalSection(&g_queue_cs);
+
     UNITY_BEGIN();
 
     /* fcb_init */
@@ -2840,5 +2855,10 @@ int main(void)
     RUN_TEST(test_threaded_concurrent_write_read_fifo_order);
     RUN_TEST(test_threaded_rapid_write_delayed_read);
 
-    return UNITY_END();
+    int result = UNITY_END();
+
+    DeleteCriticalSection(&g_fcb_cs);
+    DeleteCriticalSection(&g_queue_cs);
+
+    return result;
 }
