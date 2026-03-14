@@ -4,6 +4,9 @@ trigger: always_on
 
 # C/C++ Coding Standards
 
+> [!NOTE]
+> Existing code that does not follow these coding style rules should be left as is.
+
 ## Bracing Style
 * **Always** put both braces (opening {, closing }) on a new line.  
 * **Mandatory Braces:** Braces must be used for all statements (`if`, `else`, `for`, `while`, `do`) etc, even for single-line statements.
