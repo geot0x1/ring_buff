@@ -400,6 +400,44 @@ void test_read_fifo_order(void)
     }
 }
 
+void test_read_buffer_too_small(void)
+{
+    /*
+     * Verify that fcb_read returns FCB_INVALID_ARG when the destination
+     * buffer is smaller than the record payload.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[10];
+    memset(wbuf, 0xAB, sizeof(wbuf));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+
+    uint8_t rbuf[5]; /* Too small */
+    size_t rlen = 0;
+    TEST_ASSERT_EQUAL_INT(FCB_INVALID_ARG, fcb_read(&fcb, rbuf, sizeof(rbuf), &rlen));
+}
+
+void test_read_into_exact_size_buffer(void)
+{
+    /*
+     * Verify that fcb_read succeeds when the provided buffer is
+     * exactly the size of the record payload.
+     */
+    fcb_t fcb;
+    init_fcb(&fcb, 0);
+
+    uint8_t wbuf[16];
+    memset(wbuf, 0xCD, sizeof(wbuf));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_write(&fcb, wbuf, sizeof(wbuf)));
+
+    uint8_t rbuf[16];
+    size_t rlen = 0;
+    TEST_ASSERT_EQUAL_INT(FCB_OK, fcb_read(&fcb, rbuf, sizeof(rbuf), &rlen));
+    TEST_ASSERT_EQUAL_size_t(sizeof(wbuf), rlen);
+    TEST_ASSERT_EQUAL_MEMORY(wbuf, rbuf, rlen);
+}
+
 /* ================================================================== */
 /*  --- fcb_delete tests ---                                           */
 /* ================================================================== */
@@ -2750,6 +2788,8 @@ int main(void)
     RUN_TEST(test_read_single_record_correct_data);
     RUN_TEST(test_read_is_nondestructive);
     RUN_TEST(test_read_fifo_order);
+    RUN_TEST(test_read_buffer_too_small);
+    RUN_TEST(test_read_into_exact_size_buffer);
 
     /* fcb_delete */
     RUN_TEST(test_delete_null_fcb);
