@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # C/C++ Coding Standards
 
 ## Bracing Style
