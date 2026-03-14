@@ -11,4 +11,21 @@ trigger: always_on
 ## Indentation Style
 Use 4 spaces per indent level.
 
+
 Do not use tabs.
+
+## Naming Conventions
+* **User types** (structs, enums, unions, typedefs): `PascalCase` (e.g., `MyType`). Note: `_t` suffix is **not** permitted.
+* **Global objects** (project scope): `camelCase` (e.g., `myGlobalVariable`)
+* **Static local objects and function scoped variables**: `snake_case` (e.g., `static_local_var`, `local_var`)
+* **Functions**: `snake_case` (e.g., `my_function_name`)
+
+## File Structure and Order
+Source files should follow this organization:
+1. Include lists first
+2. Definitions (`#define`)
+3. Typedefs
+4. Function declaration
+5. Project globals
+6. Static globals
+7. Functions
