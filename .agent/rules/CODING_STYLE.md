@@ -28,7 +28,8 @@ Source files should follow this organization:
 1. Include lists first
 2. Definitions (`#define`)
 3. Typedefs
-4. Function declaration
+4. Function declarations (public/external functions)
 5. Project globals
 6. Static globals
-7. Functions
+7. **Static function declarations** (forward declarations of all static functions, placed at the top of the implementation section)
+8. Function implementations
