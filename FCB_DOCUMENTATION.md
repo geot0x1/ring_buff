@@ -89,6 +89,8 @@ Upon initialization, the FCB performs a full recovery scan:
 3.  **Validate Integrity:** Checks record magic and CRC. Invalid records are treated as the end of valid data.
 
 ### 3.2 Appending Records (`fcb_write`)
+*   Writes entries sequentially in circular order starting at `write_ptr`.
+*   Keeps appending new records at `write_ptr` until it reaches the next free location.
 1.  **Space Check:** Ensures there is enough room for the header and data.
 2.  **Sector Management:** If the current sector is full, it prepares the next one by writing a new header with an incremented sequence.
 3.  **Ordered Program:**
@@ -97,13 +99,14 @@ Upon initialization, the FCB performs a full recovery scan:
     *   Updates the `write_ptr`.
 
 ### 3.3 Reading Records (`fcb_read`)
-*   Provides a non-destructive peek at the record pointed to by `read_ptr`.
+*   Reads entries sequentially in circular order starting at `read_ptr`.
+*   Continues reading until it meets the `write_ptr` (the end of written data).
 *   Validates the record's CRC before returning.
 
 ### 3.4 Consuming and Deleting (`fcb_delete`)
-*   Marks the record at `delete_ptr` as consumed by writing `0x00` to its `consumed` flag.
-*   Advances `delete_ptr` to the next record.
-*   If `read_ptr` was at the same position, it also advances (skipping the consumed record).
+*   Marks all records that have been read (between `delete_ptr` and `read_ptr`) as consumed by writing `0x00` to their `consumed` flag.
+*   Advances `delete_ptr` forward until it meets `read_ptr`, so those records are no longer treated as unconsumed.
+*   If `read_ptr` is already at `delete_ptr`, there is nothing to delete (returns `FCB_EMPTY`).
 
 ### 3.5 Sector Discard (`fcb_discard_oldest_sector`)
 *   Erases the oldest sector, but only if all records within it are marked as consumed.
