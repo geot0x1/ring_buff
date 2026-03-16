@@ -82,6 +82,7 @@ v
 
 *   **Layout Inversion:** Sector headers and record headers are now located at the END (highest address) of each sector. Data payloads grow upward from the sector start. Record headers contain an `offset` field that points to where each record's data begins within the sector.
 *   **Header-Aware Offset:** The `offset` field in each record header is the absolute byte position from the sector start where the record data is located.
+*   **Record Walk Order:** When walking/scanning FCB records within a sector, start from the top (lowest address) of the record header region and advance toward the sector end. This ensures records are encountered in data write order.
 *   **Data Spanning:** Record data can cross sector boundaries. When data spans into the next sector, it continues immediately after the next sector's header.
 *   **New Sector Opening:** If a record cannot fit in the current sector (not enough space for data + header), a new sector is created with a fresh sector header. The new record is then written to this new sector.
 
@@ -98,8 +99,9 @@ The `fcb_t` structure maintains the runtime state:
 ### 3.1 Mounting and Recovery (`fcb_init`)
 Upon initialization, the FCB performs a full recovery scan:
 1.  **Scan Sector Headers:** Finds all valid FCB sectors and identifies the oldest/newest based on sequence numbers.
-2.  **Walk Records:** Iterates from the oldest sector to find the current `read_ptr` and `write_ptr`.
-3.  **Validate Integrity:** Checks record magic and CRC. Invalid records are treated as the end of valid data.
+2.  **Walk FCB Records:** Starting from the oldest sector, the recovery process scans the FCB records stored at the end of each sector (growing downward from sector end). For each sector, it walks through all record headers from the top (lowest address of the header region) to find each record sequentially, validating each header.
+3.  **Find First Unread:** During the record walk, the process identifies the first record with the `consumed` flag set to `0xFF` (unread). This becomes the initial `read_ptr`. Records before this are marked as already-read (consumed flag = `0x00`).
+4.  **Validate Integrity:** Checks record magic and CRC. Invalid records are treated as the end of valid data.
 
 ### 3.2 Appending Records (`fcb_write`)
 *   Writes entries sequentially in circular order, storing data from the current `write_ptr` position.
@@ -113,8 +115,10 @@ Upon initialization, the FCB performs a full recovery scan:
 
 ### 3.3 Reading Records (`fcb_read`)
 *   Reads entries sequentially in circular order starting at `read_ptr`.
-*   Continues reading until it meets the `write_ptr` (the end of written data).
-*   Validates the record's CRC before returning.
+*   To locate records: begins at the oldest sector and walks the FCB records at the top of the record header region, scanning from lowest to highest address within each sector, until it finds the record at `read_ptr`.
+*   Continues reading records sequentially through the circular buffer until it reaches `write_ptr` (the end of written data).
+*   Each record must have: valid magic (`0xFCBA`), valid CRC-8, and `consumed` flag = `0xFF` (unread).
+*   Validates the record's CRC and magic before returning the data.
 
 ### 3.4 Consuming and Deleting (`fcb_delete`)
 *   Marks all records that have been read (between `delete_ptr` and `read_ptr`) as consumed by writing `0x00` to their `consumed` flag in the record header at the end of the sector.
