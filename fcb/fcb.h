@@ -159,17 +159,23 @@ typedef struct
      * read_ptr:   Points to the next unread record. fcb_read()
      *             retrieves from here and advances this pointer on each call.
      * 
-     * write_ptr:  Points to where the next write will occur. fcb_write() 
-     *             appends data here.
+* write_ptr:  Points to where the next record header will be written. fcb_write()
+    *             appends headers here.
+    *
+    * write_data_ptr: Points to the first erased byte (`0xFF`) where the next
+    *                 record payload can be written.
      */
-    uint8_t  delete_ptr_sector;   /**< Sector index of the delete pointer (0..num_sectors-1).        */
+    uint32_t delete_ptr_sector;   /**< Sector index of the delete pointer (0..num_sectors-1).        */
     uint32_t delete_ptr_offset;   /**< Byte offset within delete_ptr_sector (after sector header).   */
 
-    uint8_t  read_ptr_sector;     /**< Sector index of the read pointer (0..num_sectors-1).          */
+    uint32_t read_ptr_sector;     /**< Sector index of the read pointer (0..num_sectors-1).          */
     uint32_t read_ptr_offset;     /**< Byte offset within read_ptr_sector (after sector header).     */
 
-    uint8_t  write_ptr_sector;    /**< Sector index where the next write will go.                    */
-    uint32_t write_ptr_offset;    /**< Byte offset within write_ptr_sector (next free byte).         */
+    uint32_t write_ptr_sector;    /**< Sector index where the next record header will be written.     */
+    uint32_t write_ptr_offset;    /**< Byte offset within write_ptr_sector (next free byte for header). */
+
+    uint32_t write_data_ptr_sector; /**< Sector index where the next record data will be written.     */
+    uint32_t write_data_ptr_offset; /**< Byte offset within write_data_ptr_sector (first erased byte). */
 
     uint32_t next_sequence;       /**< Next monotonic sequence number to assign.                      */
 

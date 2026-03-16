@@ -88,10 +88,11 @@ v
 
 ### 2.3 Memory Representation (RAM)
 The `fcb_t` structure maintains the runtime state:
-*   **Three-Pointer Architecture:**
+*   **Four-Pointer Architecture:**
     *   `delete_ptr`: (Sector index, Offset). Points to the start of the oldest record known to the system.
     *   `read_ptr`: (Sector index, Offset). Points to the start of the next record to be returned by `fcb_read`.
-    *   `write_ptr`: (Sector index, Offset). Points to the exact flash address where the next write operation will begin.
+    *   `write_ptr`: (Sector index, Offset). Points to the exact flash address where the next record header will be written.
+    *   `write_data_ptr`: (Sector index, Offset). Points to the first erased byte (`0xFF`) where the next record data block can be written.
 *   **Configuration:** Stores flash driver callbacks (`read`, `program`, `erase_sector`) and geometry (size, address).
 
 ## 3. Core Operations
@@ -115,6 +116,7 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 ### 3.2 Appending Records (`fcb_write`)
 *   Writes entries sequentially in circular order, storing data from the current `write_ptr` position.
 *   Record headers are appended at the end of the sector (growing downward from the sector end).
+*   **First-Erased Pointer:** Before writing, the FCB computes the first erased byte (`0xFF`) where the new record data can be written. This is calculated using the last record's `offset` and `length` (if any), then advancing to the first erased byte in flash.
 1.  **Space Check:** Ensures there is enough room for the record data and header within the current sector.
 2.  **Sector Management:** If the record cannot fit in the current sector, it prepares the next one by writing a new sector header with an incremented sequence, then writes the record to the new sector.
 3.  **Ordered Program:**
