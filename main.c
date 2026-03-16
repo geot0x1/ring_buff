@@ -179,6 +179,376 @@ static void test_fcb_init_with_records(void)
     printf("Passed test_fcb_init_with_records\n");
 }
 
+/**
+ * @brief Verifies fcb_init error handling for invalid arguments (NULL pointers).
+ */
+static void test_fcb_init_invalid_args(void)
+{
+    printf("Running test_fcb_init_invalid_args...\n");
+    
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // NULL fcb
+    int rc = fcb_init(NULL, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    
+    // NULL cfg
+    fcb_t fcb;
+    rc = fcb_init(&fcb, NULL);
+    assert(rc == FCB_INVALID_ARG);
+    
+    printf("Passed test_fcb_init_invalid_args\n");
+}
+
+/**
+ * @brief Verifies fcb_init error handling for invalid configuration values.
+ */
+static void test_fcb_init_invalid_config(void)
+{
+    printf("Running test_fcb_init_invalid_config...\n");
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // cfg->num_sectors = 0
+    cfg.num_sectors = 0;
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    setup_config(&cfg); // Reset
+    
+    // cfg->num_sectors > FCB_MAX_SECTORS
+    cfg.num_sectors = FCB_MAX_SECTORS + 1;
+    rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    setup_config(&cfg); // Reset
+    
+    // cfg->sector_size too small
+    cfg.sector_size = FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE; // Cannot fit 1 byte payload
+    rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    setup_config(&cfg); // Reset
+    
+    // Missing flash_read
+    cfg.flash_read = NULL;
+    rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    setup_config(&cfg); // Reset
+    
+    // Missing flash_program
+    cfg.flash_program = NULL;
+    rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    setup_config(&cfg); // Reset
+    
+    // Missing flash_erase_sector
+    cfg.flash_erase_sector = NULL;
+    rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_INVALID_ARG);
+    setup_config(&cfg); // Reset
+    
+    printf("Passed test_fcb_init_invalid_config\n");
+}
+
+/**
+ * @brief Verifies fcb_init handles corrupt sector headers gracefully.
+ *        Expects it to format Sector 0 if no valid sectors found.
+ */
+static void test_fcb_init_corrupt_flash(void)
+{
+    printf("Running test_fcb_init_corrupt_flash...\n");
+    flash_init();
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // Write a sector header with BAD MAGIC
+    fcb_sector_hdr_t hdr;
+    hdr.magic = 0xDEADC0DE; // Bad magic
+    hdr.sequence = 1;
+    hdr.status = FCB_SECTOR_STATUS_VALID;
+    hdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(hdr.reserved, 0xFF, sizeof(hdr.reserved));
+    
+    flash_write(0, &hdr, sizeof(hdr)); // Sector 0 is corrupt
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    
+    // Should have formatted Sector 0 (Seq 1) because it was the only attempt or empty
+    // Wait, if Sector 0 was corrupt, fcb_init_format_initial will ERASE Sector 0 and write Seq 1.
+    // So next_sequence should be 2.
+    assert(fcb.next_sequence == 2);
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE);
+    
+    printf("Passed test_fcb_init_corrupt_flash\n");
+}
+
+/**
+ * @brief Verifies fcb_init pointer recovery with a single sector full of active records.
+ */
+static void test_fcb_init_recover_single_sector_full(void)
+{
+    printf("Running test_fcb_init_recover_single_sector_full...\n");
+    flash_init();
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // Sector 0: Seq 5
+    fcb_sector_hdr_t shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 5;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+    
+    // Write 3 records to fill some space
+    uint32_t offset = FCB_SECTOR_HDR_SIZE;
+    fcb_record_hdr_t rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 20;
+    rhdr.status = FCB_RECORD_ACTIVE;
+    
+    for (int i = 0; i < 3; i++)
+    {
+        flash_write(offset, &rhdr, sizeof(rhdr));
+        offset += FCB_RECORD_HDR_SIZE + rhdr.length + 1; // 1 for CRC
+    }
+    // offset now after 3 records: 16 + 3*(4+20+1) = 16 + 75 = 91
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == offset);
+    assert(fcb.read_sector == 0);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
+    assert(fcb.delete_sector == 0);
+    assert(fcb.delete_offset == FCB_SECTOR_HDR_SIZE);
+    
+    printf("Passed test_fcb_init_recover_single_sector_full\n");
+}
+
+/**
+ * @brief Verifies fcb_init pointer recovery with mixed active/consumed records in a single sector.
+ */
+static void test_fcb_init_recover_single_sector_mixed(void)
+{
+    printf("Running test_fcb_init_recover_single_sector_mixed...\n");
+    flash_init();
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // Sector 0: Seq 5
+    fcb_sector_hdr_t shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 5;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+    
+    uint32_t offset = FCB_SECTOR_HDR_SIZE;
+    fcb_record_hdr_t rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 10;
+    
+    // Record 1: Consumed
+    rhdr.status = FCB_RECORD_CONSUMED;
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    uint32_t first_active_offset = offset + FCB_RECORD_HDR_SIZE + rhdr.length + 1;
+    offset = first_active_offset;
+    
+    // Record 2: Active
+    rhdr.status = FCB_RECORD_ACTIVE;
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    offset += FCB_RECORD_HDR_SIZE + rhdr.length + 1;
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == offset);
+    
+    // read_offset and delete_offset should be at the first active record
+    assert(fcb.read_sector == 0);
+    assert(fcb.read_offset == first_active_offset);
+    assert(fcb.delete_sector == 0);
+    assert(fcb.delete_offset == first_active_offset);
+    
+    printf("Passed test_fcb_init_recover_single_sector_mixed\n");
+}
+
+/**
+ * @brief Verifies fcb_init pointer recovery with multiple valid sectors but NO active records.
+ *        Expects pointers to be at the end of the newest sector.
+ */
+static void test_fcb_init_recover_chain_no_active(void)
+{
+    printf("Running test_fcb_init_recover_chain_no_active...\n");
+    flash_init();
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // Sector 0: Seq 1
+    fcb_sector_hdr_t shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 1;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+    
+    // Sector 1: Seq 2
+    shdr.sequence = 2;
+    flash_write(cfg.sector_size, &shdr, sizeof(shdr));
+    
+    // Write consumed records to Sector 0
+    uint32_t offset = FCB_SECTOR_HDR_SIZE;
+    fcb_record_hdr_t rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 10;
+    rhdr.status = FCB_RECORD_CONSUMED;
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    offset += FCB_RECORD_HDR_SIZE + rhdr.length + 1;
+    
+    // Write consumed records to Sector 1
+    uint32_t offset1 = cfg.sector_size + FCB_SECTOR_HDR_SIZE;
+    flash_write(offset1, &rhdr, sizeof(rhdr));
+    offset1 += FCB_RECORD_HDR_SIZE + rhdr.length + 1;
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    
+    // Newest sector is Sector 1 (Seq 2)
+    assert(fcb.write_sector == 1);
+    assert(fcb.write_offset == offset1 - cfg.sector_size); // Offset within sector 1
+    
+    // No active records -> read/delete match write
+    assert(fcb.read_sector == fcb.write_sector);
+    assert(fcb.read_offset == fcb.write_offset);
+    
+    printf("Passed test_fcb_init_recover_chain_no_active\n");
+}
+
+/**
+ * @brief Verifies fcb_init skips sectors with status CONSUMED.
+ */
+static void test_fcb_init_recover_with_consumed_sector(void)
+{
+    printf("Running test_fcb_init_recover_with_consumed_sector...\n");
+    flash_init();
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // Sector 0: Seq 1, Status = CONSUMED
+    fcb_sector_hdr_t shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 1;
+    shdr.status = FCB_SECTOR_STATUS_CONSUMED;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+    
+    // Sector 1: Seq 2, Status = VALID
+    shdr.sequence = 2;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    flash_write(cfg.sector_size, &shdr, sizeof(shdr));
+    
+    // Write an active record to Sector 1
+    uint32_t offset1 = cfg.sector_size + FCB_SECTOR_HDR_SIZE;
+    fcb_record_hdr_t rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 10;
+    rhdr.status = FCB_RECORD_ACTIVE;
+    flash_write(offset1, &rhdr, sizeof(rhdr));
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    
+    // Should recover to Sector 1
+    assert(fcb.read_sector == 1);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
+    
+    assert(fcb.write_sector == 1);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + rhdr.length + 1);
+    
+    printf("Passed test_fcb_init_recover_with_consumed_sector\n");
+}
+
+/**
+ * @brief Verifies fcb_init stops recovery in a sector when encountering a corrupt record.
+ *        Expects it to advance write_offset to end of sector (forced wrap) if range is not erased.
+ */
+static void test_fcb_init_recover_with_corrupt_record(void)
+{
+    printf("Running test_fcb_init_recover_with_corrupt_record...\n");
+    flash_init();
+    
+    fcb_t fcb;
+    fcb_config_t cfg;
+    setup_config(&cfg);
+    
+    // Sector 0: Seq 1
+    fcb_sector_hdr_t shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 1;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+    
+    uint32_t offset = FCB_SECTOR_HDR_SIZE;
+    fcb_record_hdr_t rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 10;
+    rhdr.status = FCB_RECORD_ACTIVE;
+    
+    // Record 1: Active (Valid)
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    uint32_t next_record_offset = offset + FCB_RECORD_HDR_SIZE + rhdr.length + 1;
+    offset = next_record_offset;
+    
+    // Record 2: Corrupt (Bad Magic)
+    rhdr.magic = 0x55; // Bad magic
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    
+    // read_offset should be at the first active record (Record 1)
+    assert(fcb.read_sector == 0);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
+    
+    // write_offset should be FORCED WRAP to sector_size because it's single sector
+    // and range is not erased.
+    // Wait, let's verify if fcb_is_range_erased returns false for the corrupt record.
+    // The corrupt record HAS data (0x55 magic and previous data), so it is not erased.
+    // So according to fcb_recover_pointers_single, it forces wrap to sector_size.
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == cfg.sector_size);
+    
+    printf("Passed test_fcb_init_recover_with_corrupt_record\n");
+}
+
 /* ================================================================== */
 /*  Main Runner                                                       */
 /* ================================================================== */
@@ -189,9 +559,17 @@ int main(void)
     printf("FCB Init Simulation Tests\n");
     printf("================================================\n");
 
+    test_fcb_init_invalid_args();
+    test_fcb_init_invalid_config();
+    test_fcb_init_corrupt_flash();
     test_fcb_init_empty_flash();
     test_fcb_init_sequence_order();
     test_fcb_init_with_records();
+    test_fcb_init_recover_single_sector_full();
+    test_fcb_init_recover_single_sector_mixed();
+    test_fcb_init_recover_chain_no_active();
+    test_fcb_init_recover_with_consumed_sector();
+    test_fcb_init_recover_with_corrupt_record();
 
     printf("\n================================================\n");
     printf("All simulation tests completed successfully\n");
