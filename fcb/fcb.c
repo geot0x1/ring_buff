@@ -128,6 +128,11 @@ static int fcb_read_record_data_multipart(fcb_t *fcb, uint32_t start_sector,
 static void fcb_advance_read_ptr_to_next(fcb_t *fcb, uint32_t current_sector,
                                          uint32_t current_offset, uint16_t record_length);
 
+static bool is_block_erased(fcb_t *fcb, uint32_t sector, uint32_t offset, uint32_t length);
+
+static int scan_forward_to_next_record(fcb_t *fcb, uint32_t *sector, uint32_t *offset,
+                                       fcb_record_hdr_t *rec_hdr);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -917,6 +922,146 @@ static int fcb_find_record_header_for_offset(fcb_t *fcb, uint32_t sector_num,
 }
 
 /**
+ * Check if a block of flash memory is erased (all bytes are 0xFF).
+ *
+ * Reads the specified block from flash and checks if all bytes equal 0xFF.
+ * Returns true if erased, false otherwise or on read error.
+ *
+ * @param fcb     Initialised FCB instance.
+ * @param sector  Sector number.
+ * @param offset  Byte offset within sector.
+ * @param length  Number of bytes to check (typically 8 for a record header).
+ * @return true if all bytes are 0xFF, false otherwise.
+ */
+static bool is_block_erased(fcb_t *fcb, uint32_t sector, uint32_t offset, uint32_t length)
+{
+    if (sector >= fcb->config.num_sectors || offset >= fcb->config.sector_size)
+    {
+        return false;
+    }
+
+    uint8_t buf[256];  /* Temporary buffer for reading */
+    if (length > sizeof(buf))
+    {
+        return false;  /* Block too large to check */
+    }
+
+    uint32_t sector_addr = fcb->config.start_addr + (sector * fcb->config.sector_size);
+    uint32_t block_addr = sector_addr + offset;
+
+    int rc = fcb_flash_read(fcb, block_addr, buf, length);
+    if (rc != FCB_OK)
+    {
+        return false;  /* Read error */
+    }
+
+    for (uint32_t i = 0; i < length; i++)
+    {
+        if (buf[i] != 0xFF)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Scan forward from the current read_ptr to find the next valid record or end-of-data marker.
+ *
+ * Starting from (sector, offset), this function:
+ *   1. Scans forward through the circular buffer (wrapping sectors as needed).
+ *   2. Counts consecutive erased (0xFF) blocks.
+ *   3. When a potentially valid record header is found (magic 0xFCBA and consumed=0xFF),
+ *      validates it and returns the record with FCB_OK.
+ *   4. If 8 consecutive erased 8-byte blocks (64 bytes total) are found,
+ *      assumes no more data and returns FCB_EMPTY.
+ *   5. If write_ptr is encountered before finding a valid record,
+ *      returns FCB_EMPTY (priority: never go past write_ptr).
+ *
+ * @param fcb     Initialised FCB instance.
+ * @param sector  Pointer to sector number (input/output). On success, points to the record's sector.
+ * @param offset  Pointer to offset (input/output). On success, points to the record's offset.
+ * @param rec_hdr Pointer to record header structure (output). Filled with validated header on success.
+ * @return FCB_OK if valid record found, FCB_EMPTY if end of data reached, FCB_CORRUPTED on error.
+ */
+static int scan_forward_to_next_record(fcb_t *fcb, uint32_t *sector, uint32_t *offset,
+                                       fcb_record_hdr_t *rec_hdr)
+{
+    if (!sector || !offset || !rec_hdr)
+    {
+        return FCB_CORRUPTED;
+    }
+
+    uint32_t current_sector = *sector;
+    uint32_t current_offset = *offset;
+    uint32_t consecutive_erased = 0;
+
+    /*
+     * Scan forward by stepping 8 bytes at a time (record header size).
+     * This ensures we check systematically for valid record headers or erased blocks.
+     */
+    for (uint32_t scan_count = 0; scan_count < 10000; scan_count++)  /* Limit iterations to avoid infinite loops */
+    {
+        /* Check if we've reached write_ptr (boundary check, priority) */
+        if (current_sector == fcb->write_ptr_sector &&
+            current_offset == fcb->write_ptr_offset)
+        {
+            /* Reached write_ptr, no more data */
+            return FCB_EMPTY;
+        }
+
+        /* Check for write_ptr crossing in circular buffer */
+        if (current_sector == fcb->write_ptr_sector &&
+            current_offset > fcb->write_ptr_offset)
+        {
+            /* Would go past write_ptr, stop here */
+            return FCB_EMPTY;
+        }
+
+        /* Try to read and validate record header at current position */
+        int rc = read_record_header(fcb, current_sector, current_offset, rec_hdr);
+
+        if (rc == FCB_OK && rec_hdr->consumed == FCB_RECORD_ACTIVE)
+        {
+            /* Found a valid, active record header */
+            *sector = current_sector;
+            *offset = current_offset;
+            return FCB_OK;
+        }
+
+        /* Check if this 8-byte block is erased (0xFF pattern) */
+        if (is_block_erased(fcb, current_sector, current_offset, FCB_RECORD_HDR_SIZE))
+        {
+            consecutive_erased++;
+            if (consecutive_erased >= 8)
+            {
+                /* Found 8 consecutive erased blocks, assume no more data */
+                return FCB_EMPTY;
+            }
+        }
+        else
+        {
+            /* Non-erased block found, reset counter */
+            consecutive_erased = 0;
+        }
+
+        /* Advance to next 8-byte position */
+        current_offset += FCB_RECORD_HDR_SIZE;
+
+        /* Handle sector wrap-around */
+        if (current_offset >= fcb->config.sector_size)
+        {
+            current_offset = FCB_SECTOR_HDR_SIZE;  /* Skip sector header on next sector */
+            current_sector = (current_sector + 1) % fcb->config.num_sectors;
+        }
+    }
+
+    /* Scan exhausted without finding valid record or 8 erased blocks */
+    return FCB_EMPTY;
+}
+
+/**
  * Read record data from flash, handling sector boundary spanning.
  *
  * Reads a record's data payload from flash, handling the case where the
@@ -1018,6 +1163,13 @@ static void fcb_advance_read_ptr_to_next(fcb_t *fcb, uint32_t current_sector,
  *   - Acquired the mutex (via fcb_lock)
  *   - Caller is responsible for releasing the mutex (via fcb_unlock)
  *
+ * Implementation:
+ *   - Starts at read_ptr searching for the next valid record.
+ *   - If the record at read_ptr is corrupted or missing, scans forward
+ *     looking for the next valid record.
+ *   - If 8 consecutive erased blocks are found, assumes no more data.
+ *   - Respects write_ptr as a hard boundary (never advances past it).
+ *
  * @param fcb       Initialised FCB instance (assumed valid).
  * @param buf       Output buffer for record data (assumed non-NULL).
  * @param buf_len   Size of output buffer (assumed > 0).
@@ -1038,13 +1190,19 @@ static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len
 
     uint32_t sector_num = fcb->read_ptr_sector;
     uint32_t data_offset = fcb->read_ptr_offset;
-
-    /* Find the record header at current read_ptr */
     fcb_record_hdr_t rec_hdr;
+
+    /* Try to find valid record starting at read_ptr */
     int rc = fcb_find_record_header_for_offset(fcb, sector_num, data_offset, &rec_hdr);
+
+    /* If not found at current position, scan forward for next valid record or end of data */
     if (rc != FCB_OK)
     {
-        return FCB_CORRUPTED;  /* Record header not found or not active */
+        rc = scan_forward_to_next_record(fcb, &sector_num, &data_offset, &rec_hdr);
+        if (rc != FCB_OK)
+        {
+            return rc;  /* FCB_EMPTY or FCB_CORRUPTED */
+        }
     }
 
     /* Validate record length fits in output buffer */
@@ -1054,7 +1212,7 @@ static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len
     }
 
     /* Read record data from flash (handles sector spanning) */
-    rc = fcb_read_record_data_multipart(fcb, sector_num, data_offset, 
+    rc = fcb_read_record_data_multipart(fcb, sector_num, data_offset,
                                         rec_hdr.length, buf);
     if (rc != FCB_OK)
     {
