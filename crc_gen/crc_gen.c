@@ -47,6 +47,29 @@ static const uint32_t CRC32Table[] =
 	0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
 };
 
+uint8_t crc_gen(const uint8_t *data, uint8_t len)
+{
+	uint8_t crc = 0xFF;
+	uint8_t  i, j;
+
+	for (i = 0; i < len; i++)
+	{
+		crc ^= data[i];
+		for (j = 0; j < 8; j++)
+		{
+			if ((crc & 0x80) != 0)
+			{
+				crc = (uint8_t)((crc << 1) ^ 0x31);
+			}
+			else
+			{
+				crc <<= 1;
+			}
+		}
+	}
+	return (crc);
+}
+
 uint32_t crc32_gen(const uint8_t * buf, uint32_t len, uint32_t start)
 {
 	const uint32_t POLY = 0x82F63B78;

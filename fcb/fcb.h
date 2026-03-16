@@ -24,7 +24,7 @@ extern "C" {
 #define FCB_SECTOR_MAGIC    0x0FCBF1F0U
 
 /** Magic value written into every valid record header. */
-#define FCB_RECORD_MAGIC    ((uint32_t)0x0FCBDA7AU)
+#define FCB_RECORD_MAGIC    0xFCBAU
 
 /** Maximum number of sectors the FCB can manage. */
 #define FCB_MAX_SECTORS     64U
@@ -36,7 +36,7 @@ extern "C" {
 #define FCB_SECTOR_HDR_SIZE 16U
 
 /** Size of the on-flash record header (bytes). */
-#define FCB_RECORD_HDR_SIZE 12U
+#define FCB_RECORD_HDR_SIZE 8U
 
 /** Sector status values. */
 #define FCB_SECTOR_STATUS_ERASED  0xFFU
@@ -70,23 +70,23 @@ typedef struct
 #pragma pack(pop)
 
 /**
- * Record header — placed before every record payload.
+ * Record header — placed at the END of every sector (highest address).
  *
  *   Offset  Size  Field
- *   0       4     magic       (0x0FCBDATA)
- *   4       2     length      (1–1024)
- *   6       4     crc32       (CRC-32 of the data only)
- *   10      1     consumed    (0xFF = active, 0x00 = consumed)
- *   11      1     reserved
+ *   0       2     magic       (0xFCBA, identifies a valid record header)
+ *   2       2     length      (1–1024)
+ *   4       2     offset      (offset of data start within this sector)
+ *   6       1     consumed    (0xFF = active, 0x00 = consumed)
+ *   7       1     crc8        (CRC-8 of the header, excluding consumed flag)
  */
 #pragma pack(push, 1)
 typedef struct
 {
-    uint32_t magic;
+    uint16_t magic;
     uint16_t length;
-    uint32_t crc32;
+    uint16_t offset;
     uint8_t  consumed;
-    uint8_t  reserved;
+    uint8_t  crc8;
 } fcb_record_hdr_t;
 #pragma pack(pop)
 

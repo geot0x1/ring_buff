@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+uint8_t crc_gen(const uint8_t *data, uint8_t len);
+
 
 /**
  * @brief Calculates CRC32.

@@ -6,9 +6,9 @@ The Flash Circular Buffer (FCB) is a robust, power-fail-safe, circular FIFO impl
 
 ### 1.1 Power-Fail Safety
 The FCB is designed to ensure that the buffer state remains recoverable at any point, even if power is lost during a write or erase operation.
-*   **Ordered Writes:** Sector headers are written before any records. Record headers are written before the record data. This allows the recovery process to identify partially written or corrupted data.
+*   **Ordered Writes:** Record data is written first, followed by the record header at the end of the sector. Sector headers are written before any records in that sector. This allows the recovery process to identify partially written or corrupted data.
 *   **Atomic State Transitions:** NOR flash's property of only allowing bits to transition from 1 to 0 (unless erased) is exploited. The "consumed" flag transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
-*   **CRC Validation:** Every record includes a CRC-32 of its data payload. This ensures that any data corruption (e.g., from an interrupted write) is detected.
+*   **CRC-8 Validation:** Every record header includes a CRC-8 of the header itself (excluding the consumed flag). This ensures that header corruption is detected.
 
 ### 1.2 NOR Flash Optimization
 *   **Sector-Based Erasure:** The buffer is divided into multiple sectors. Erasure occurs at the sector level only when all records within that sector have been consumed.
@@ -27,50 +27,62 @@ Located at the beginning of every sector.
 | 8 | 1 | `status` | `0xFF` (erased) or `0xAA` (valid). |
 | 9 | 7 | `reserved` | Future use. |
 
-#### Record Header (12 bytes)
-Placed before every record payload.
+#### Record Header (8 bytes)
+Located at the END of every sector (highest address), growing downward. Each record header stores metadata about a corresponding record's data.
+
 | Offset | Size | Field | Description |
 | :--- | :--- | :--- | :--- |
-| 0 | 4 | `magic` | `0x0FCBDA7A` identifies a valid record header. |
-| 4 | 2 | `length` | Size of the data payload (1–1024 bytes). |
-| 6 | 4 | `crc32` | CRC-32 checksum of the payload data. |
-| 10 | 1 | `consumed` | `0xFF` (active) or `0x00` (consumed). |
-| 11 | 1 | `reserved` | Future use. |
+| 0 | 2 | `magic` | `0xFCBA` identifies a valid record header. |
+| 2 | 2 | `length` | Size of the data payload (1–1024 bytes). |
+| 4 | 2 | `offset` | Byte offset from the sector start where the record data begins. |
+| 6 | 1 | `consumed` | `0xFF` (active) or `0x00` (consumed). |
+| 7 | 1 | `crc8` | CRC-8 checksum of the header (excluding the consumed flag). |
 
 ### 2.2 Flash Memory Layout
-The FCB treats the assigned flash region as a contiguous array of sectors, which are mathematically mapped to a circular buffer.
+The FCB treats the assigned flash region as a contiguous array of sectors, which are mathematically mapped to a circular buffer. Within each sector, record data grows upward from the sector start, while record headers grow downward from the sector end.
 
 ```text
 Flash Start Address
 |
 v
-+-----------------------+ <--- Sector 0
-| Sector Header (16B)   |
++-----------------------+ <--- Sector 0 Start
+| Data Payload 1        |
 +-----------------------+
-| Record 1 Header (12B) |
-+-----------------------+
-| Record 1 Data         |
-+-----------------------+
-| ...                   |
-+-----------------------+ <--- Sector 1
-| Sector Header (16B)   |
-+-----------------------+
-| Record N Header (12B) |
-+-----------------------+
-| Record N Data (Part 1)|
-+-----------------------+ <--- Sector 2 (Wrap/Span example)
-| Sector Header (16B)   |
-+-----------------------+
-| Record N Data (Part 2)|
-+-----------------------+
-| Record N+1 Header     |
+| Data Payload 2        |
 +-----------------------+
 | ...                   |
 +-----------------------+
+| Record Header 2 (8B)  |  <--- Headers at end, growing down
+| Record Header 1 (8B)  |
+| Sector Header (16B)   |
++-----------------------+ <--- Sector 0 End (highest address)
+|
+v
++-----------------------+ <--- Sector 1 Start
+| Data Payload N (Part 1) |
++-----------------------+
+| ...                   |
++-----------------------+
+| Record Header 1 (8B)  |
+| Sector Header (16B)   |
++-----------------------+ <--- Sector 1 End (highest address)
+|
+v
++-----------------------+ <--- Sector 2 Start
+| Data Payload N (Part 2) |  (continuation from Sector 1)
++-----------------------+
+| Data Payload N+1      |
++-----------------------+
+| Record Header 2 (8B)  |
+| Record Header 1 (8B)  |
+| Sector Header (16B)   |
++-----------------------+ <--- Sector 2 End (highest address)
 ```
 
-*   **Logical vs. Physical:** While sectors are physical contiguous blocks, the `sequence` number in the header determines the logical "oldest" to "newest" order.
-*   **Data Spanning:** Record data can cross sector boundaries. In such cases, the data continues immediately after the next sector's header.
+*   **Layout Inversion:** Sector headers and record headers are now located at the END (highest address) of each sector. Data payloads grow upward from the sector start. Record headers contain an `offset` field that points to where each record's data begins within the sector.
+*   **Header-Aware Offset:** The `offset` field in each record header is the absolute byte position from the sector start where the record data is located.
+*   **Data Spanning:** Record data can cross sector boundaries. When data spans into the next sector, it continues immediately after the next sector's header.
+*   **New Sector Opening:** If a record cannot fit in the current sector (not enough space for data + header), a new sector is created with a fresh sector header. The new record is then written to this new sector.
 
 ### 2.3 Memory Representation (RAM)
 The `fcb_t` structure maintains the runtime state:
@@ -89,14 +101,14 @@ Upon initialization, the FCB performs a full recovery scan:
 3.  **Validate Integrity:** Checks record magic and CRC. Invalid records are treated as the end of valid data.
 
 ### 3.2 Appending Records (`fcb_write`)
-*   Writes entries sequentially in circular order starting at `write_ptr`.
-*   Keeps appending new records at `write_ptr` until it reaches the next free location.
-1.  **Space Check:** Ensures there is enough room for the header and data.
-2.  **Sector Management:** If the current sector is full, it prepares the next one by writing a new header with an incremented sequence.
+*   Writes entries sequentially in circular order, storing data from the current `write_ptr` position.
+*   Record headers are appended at the end of the sector (growing downward from the sector end).
+1.  **Space Check:** Ensures there is enough room for the record data and header within the current sector.
+2.  **Sector Management:** If the record cannot fit in the current sector, it prepares the next one by writing a new sector header with an incremented sequence, then writes the record to the new sector.
 3.  **Ordered Program:**
-    *   Writes the record header first.
-    *   Writes the data payload (which can span into the next sector).
-    *   Updates the `write_ptr`.
+    *   Writes the record data first at `write_ptr`.
+    *   Writes the record header at the sector end (with an offset field pointing to the data start).
+    *   Updates the `write_ptr` to account for the space used.
 
 ### 3.3 Reading Records (`fcb_read`)
 *   Reads entries sequentially in circular order starting at `read_ptr`.
@@ -104,7 +116,7 @@ Upon initialization, the FCB performs a full recovery scan:
 *   Validates the record's CRC before returning.
 
 ### 3.4 Consuming and Deleting (`fcb_delete`)
-*   Marks all records that have been read (between `delete_ptr` and `read_ptr`) as consumed by writing `0x00` to their `consumed` flag.
+*   Marks all records that have been read (between `delete_ptr` and `read_ptr`) as consumed by writing `0x00` to their `consumed` flag in the record header at the end of the sector.
 *   Advances `delete_ptr` forward until it meets `read_ptr`, so those records are no longer treated as unconsumed.
 *   If `read_ptr` is already at `delete_ptr`, there is nothing to delete (returns `FCB_EMPTY`).
 
@@ -126,11 +138,14 @@ Upon initialization, the FCB performs a full recovery scan:
 
 ## 5. Implementation Notes & Limitations
 
-> [!WARNING]
-> **Record Spanning:** While record headers must fit entirely within a single sector, data payloads *can* span into the very next sector. This ensures reliable header reads.
+> [!IMPORTANT]
+> **Header Offset Field:** The `offset` field in each record header specifies the byte position from the sector start where the record data is located. This allows for flexible data layout and efficient record header validation.
+
+> [!IMPORTANT]
+> **Record Spanning:** Record data can cross sector boundaries if it extends beyond the current sector. Headers and new sectors are created as needed.
+
+> [!IMPORTANT]
+> **New Sector Strategy:** If a record cannot fit in the current sector (including both its data and header), the FCB opens a new sector by writing a fresh sector header and writes the record to the new sector.
 
 > [!IMPORTANT]
 > **Thread Safety:** The FCB provides lock/unlock callbacks in its configuration. These should be populated if the FCB will be accessed from multiple threads or interrupts.
-
-### Known Issues
-*   **Collision Detection Bug:** There is a known bug in `is_full_nolock` and `prepare_next_sector` where collision checks are conditionally skipped if both pointers are in the same sector. This can lead to buffer state corruption under specific wrap-around conditions.
