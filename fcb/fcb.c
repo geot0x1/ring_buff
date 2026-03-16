@@ -121,8 +121,6 @@ static int fcb_find_record_header_for_offset(fcb_t *fcb, uint32_t sector_num,
                                               uint32_t data_offset,
                                               fcb_record_hdr_t *rec_hdr);
 
-static bool is_block_erased(fcb_t *fcb, uint32_t sector, uint32_t offset, uint32_t length);
-
 
 /* ================================================================== */
 /*  Sector header writer                                               */
@@ -911,52 +909,6 @@ static int fcb_find_record_header_for_offset(fcb_t *fcb, uint32_t sector_num,
 
     return FCB_CORRUPTED;  /* Record header not found or not active */
 }
-
-/**
- * Check if a block of flash memory is erased (all bytes are 0xFF).
- *
- * Reads the specified block from flash and checks if all bytes equal 0xFF.
- * Returns true if erased, false otherwise or on read error.
- *
- * @param fcb     Initialised FCB instance.
- * @param sector  Sector number.
- * @param offset  Byte offset within sector.
- * @param length  Number of bytes to check (typically 8 for a record header).
- * @return true if all bytes are 0xFF, false otherwise.
- */
-static bool is_block_erased(fcb_t *fcb, uint32_t sector, uint32_t offset, uint32_t length)
-{
-    if (sector >= fcb->config.num_sectors || offset >= fcb->config.sector_size)
-    {
-        return false;
-    }
-
-    uint8_t buf[256];  /* Temporary buffer for reading */
-    if (length > sizeof(buf))
-    {
-        return false;  /* Block too large to check */
-    }
-
-    uint32_t sector_addr = fcb->config.start_addr + (sector * fcb->config.sector_size);
-    uint32_t block_addr = sector_addr + offset;
-
-    int rc = fcb_flash_read(fcb, block_addr, buf, length);
-    if (rc != FCB_OK)
-    {
-        return false;  /* Read error */
-    }
-
-    for (uint32_t i = 0; i < length; i++)
-    {
-        if (buf[i] != 0xFF)
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 
 static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 {
