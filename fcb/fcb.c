@@ -405,7 +405,10 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
         /* No valid sectors. Format sector 0 and start from scratch. */
         fcb_init_empty_state(fcb);
         rc = erase_sector(fcb, 0);
-        if (rc != FCB_OK) return rc;
+        if (rc != FCB_OK)
+        {
+            return rc;
+        }
         rc = write_sector_header(fcb, 0, 1, FCB_SECTOR_STATUS_VALID);
         return rc;
     }
