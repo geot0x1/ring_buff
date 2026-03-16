@@ -97,11 +97,18 @@ The `fcb_t` structure maintains the runtime state:
 ## 3. Core Operations
 
 ### 3.1 Mounting and Recovery (`fcb_init`)
-Upon initialization, the FCB performs a full recovery scan:
+Upon initialization, the FCB performs a full recovery scan with two separate walks:
+
+**Find read_ptr (tail):**
 1.  **Scan Sector Headers:** Finds all valid FCB sectors and identifies the oldest/newest based on sequence numbers.
-2.  **Walk FCB Records:** Starting from the oldest sector, the recovery process scans the FCB records stored at the end of each sector (growing downward from sector end). For each sector, it walks through all record headers from the top (lowest address of the header region) to find each record sequentially, validating each header.
+2.  **Walk from Oldest Sector:** Starting from the oldest sector, the recovery process scans the FCB records stored at the end of each sector (growing downward from sector end). For each sector, it walks through all record headers from the top (lowest address of the header region) to find each record sequentially, validating each header.
 3.  **Find First Unread:** During the record walk, the process identifies the first record with the `consumed` flag set to `0xFF` (unread). This becomes the initial `read_ptr`. Records before this are marked as already-read (consumed flag = `0x00`).
 4.  **Validate Integrity:** Checks record magic and CRC. Invalid records are treated as the end of valid data.
+
+**Find write_ptr (head):**
+1.  **Scan from Newest Sector:** Starting from the newest sector (highest sequence number), the recovery process walks the FCB records at the end of the sector.
+2.  **Find Latest Valid Record:** Scans through record headers from the bottom (highest address in the header region) moving toward the top (lowest address), to locate the most recently written valid record header (valid magic `0xFCBA`, valid CRC-8).
+3.  **Position at Next Byte:** Positions `write_ptr` at the next available byte after the latest valid record, which is the erased space where the next record will be written.
 
 ### 3.2 Appending Records (`fcb_write`)
 *   Writes entries sequentially in circular order, storing data from the current `write_ptr` position.
