@@ -100,6 +100,9 @@ static void fcb_recovery_find_write_ptr(fcb_t *fcb, uint32_t newest_sector,
                                         uint32_t *write_ptr_offset,
                                         uint32_t *write_data_ptr_offset);
 
+/* Utility functions */
+static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -601,8 +604,62 @@ static void fcb_recovery_find_write_ptr(fcb_t *fcb, uint32_t newest_sector,
 }
 
 /* ================================================================== */
+/*  Utility Functions                                                  */
+/* ================================================================== */
+
+/**
+ * Check if a sector is completely erased (all bytes 0xFF).
+ *
+ * Reads the sector in pages (256 bytes) to minimize memory usage and
+ * verify that every byte is 0xFF (the erased state on NOR flash).
+ *
+ * @param fcb        Initialised FCB instance.
+ * @param sector_num Sector number to check (0..num_sectors-1).
+ * @return true if entire sector is erased, false otherwise.
+ */
+static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num)
+{
+    if (!fcb || sector_num >= fcb->config.num_sectors)
+    {
+        return false;
+    }
+
+    const uint32_t FCB_PAGE_SIZE = 256U;
+
+    uint8_t page_buf[FCB_PAGE_SIZE];
+    uint32_t sector_addr = fcb->config.start_addr + (sector_num * fcb->config.sector_size);
+    uint32_t total_bytes = fcb->config.sector_size;
+
+    /* Read and check the sector page by page */
+    for (uint32_t offset = 0; offset < total_bytes; offset += FCB_PAGE_SIZE)
+    {
+        size_t bytes_to_read = (total_bytes - offset < FCB_PAGE_SIZE) ? 
+                               (total_bytes - offset) : FCB_PAGE_SIZE;
+
+        int rc = fcb->config.flash_read(fcb->config.flash_ctx, sector_addr + offset,
+                                        page_buf, bytes_to_read);
+        if (rc != 0)
+        {
+            return false;  /* Read error */
+        }
+
+        /* Check if all bytes in this page are 0xFF */
+        for (size_t i = 0; i < bytes_to_read; i++)
+        {
+            if (page_buf[i] != 0xFF)
+            {
+                return false;  /* Found a byte that's not erased */
+            }
+        }
+    }
+
+    return true;  /* Entire sector is erased */
+}
+
+/* ================================================================== */
 /*  Public API wrappers (algorithm removed)                            */
 /* ================================================================== */
+
 
 int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
 {
