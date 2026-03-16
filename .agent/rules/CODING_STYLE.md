@@ -33,3 +33,8 @@ Source files should follow this organization:
 6. Static globals
 7. **Static function declarations** (forward declarations of all static functions, placed at the top of the implementation section)
 8. Function implementations
+
+## Include Files
+* **Never use relative paths** in include statements (e.g., never use `#include "../header.h"`).
+* **Use direct header names by default** (e.g., `#include "header.h"`) unless a specific directory structure or namespace separation is explicitly required.
+* **Only use path-based includes** if the project configuration or CMake setup supports automatic header search paths.
