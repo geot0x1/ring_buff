@@ -116,11 +116,6 @@ static int erase_sector(fcb_t *fcb, uint32_t sector_num);
 /* Read operations without locking */
 static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
 
-/* Read helper functions */
-static int fcb_find_record_header_for_offset(fcb_t *fcb, uint32_t sector_num,
-                                              uint32_t data_offset,
-                                              fcb_record_hdr_t *rec_hdr);
-
 
 /* ================================================================== */
 /*  Sector header writer                                               */
@@ -860,61 +855,17 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     return FCB_OK;
 }
 
-/**
- * Find the record header matching a given data offset within a sector.
- *
- * Walks record headers from the end of the sector downward (headers grow
- * downward from sector end) to locate the header whose offset field matches
- * the provided data_offset and is marked as active (consumed == 0xFF).
- *
- * @param fcb           Initialised FCB instance.
- * @param sector_num    Sector number to search.
- * @param data_offset   Data offset to match.
- * @param rec_hdr       Pointer to store the found record header.
- *
- * @return FCB_OK if header found and valid, FCB_CORRUPTED if not found or invalid.
- */
-static int fcb_find_record_header_for_offset(fcb_t *fcb, uint32_t sector_num,
-                                              uint32_t data_offset,
-                                              fcb_record_hdr_t *rec_hdr)
-{
-    /* Scan record headers from end of sector downward */
-    uint32_t sector_end = fcb->config.sector_size;
-    uint32_t header_offset = sector_end - FCB_RECORD_HDR_SIZE;
-
-    for (uint32_t i = 0; i < sector_end / FCB_RECORD_HDR_SIZE; i++)
-    {
-        if (header_offset < FCB_SECTOR_HDR_SIZE)
-        {
-            break;  /* Reached sector header area */
-        }
-
-        int rc = read_record_header(fcb, sector_num, header_offset, rec_hdr);
-
-        if (rc != FCB_OK)
-        {
-            /* Invalid header — continue searching */
-            header_offset -= FCB_RECORD_HDR_SIZE;
-            continue;
-        }
-
-        /* Check if this header's offset matches and is active */
-        if (rec_hdr->offset == data_offset && rec_hdr->consumed == FCB_RECORD_ACTIVE)
-        {
-            return FCB_OK;
-        }
-
-        header_offset -= FCB_RECORD_HDR_SIZE;
-    }
-
-    return FCB_CORRUPTED;  /* Record header not found or not active */
-}
-
 static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 {
 
     while (fcb->read_ptr_sector != fcb->write_ptr_sector || fcb->read_ptr_offset != fcb->write_ptr_offset)
     {
+        fcb_record_hdr_t rec_hdr;
+        int rc = read_record_header(fcb, fcb->read_ptr_sector, fcb->read_ptr_offset, &rec_hdr);
+        if (rc != FCB_OK)
+        {
+            return FCB_CORRUPTED;
+        }
 
     }
     return FCB_OK;
