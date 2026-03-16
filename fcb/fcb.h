@@ -62,10 +62,11 @@ extern "C" {
 #pragma pack(push, 1)
 typedef struct
 {
-    uint32_t magic;
-    uint32_t sequence;
-    uint8_t  status;
-    uint8_t  reserved[7];
+    uint32_t magic;      /**< 0x0FCBF1F0                                                */
+    uint32_t sequence;   /**< Monotonically increasing ID                              */
+    uint16_t data_start; /**< Offset from sector start to the first NEW record header */
+    uint8_t  status;     /**< 0xFF: Valid, 0x00: Consumed                              */
+    uint8_t  reserved[5];/**< Padding to 16 bytes                                      */
 } fcb_sector_hdr_t;
 #pragma pack(pop)
 

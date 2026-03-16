@@ -86,6 +86,7 @@ static void test_fcb_init_sequence_order(void)
     fcb_sector_hdr_t hdr;
     hdr.magic = FCB_SECTOR_MAGIC;
     hdr.status = FCB_SECTOR_STATUS_VALID;
+    hdr.data_start = FCB_SECTOR_HDR_SIZE; // Fixed initialized header offset
     memset(hdr.reserved, 0xFF, sizeof(hdr.reserved));
     
     // Valid contiguous indices following ring order: 2 -> 3 -> 0 -> 1
@@ -142,6 +143,7 @@ static void test_fcb_init_with_records(void)
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 1;
     shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE; // Fixed initialized header offset
     memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
     flash_write(0, &shdr, sizeof(shdr));
     

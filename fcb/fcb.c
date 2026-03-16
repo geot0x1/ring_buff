@@ -72,7 +72,7 @@ static inline void fcb_unlock(fcb_t *fcb)
 /* ================================================================== */
 
 static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
-                               uint32_t sequence, uint8_t status);
+                               uint32_t sequence, uint16_t data_start, uint8_t status);
 
 static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
                               fcb_sector_hdr_t *hdr);
@@ -330,12 +330,13 @@ static int read_sector_header(fcb_t *fcb, uint32_t sector_num, fcb_sector_hdr_t 
     return fcb_flash_read(fcb, addr, (uint8_t *)hdr, sizeof(*hdr));
 }
 
-static int write_sector_header(fcb_t *fcb, uint32_t sector_num, uint32_t sequence, uint8_t status)
+static int write_sector_header(fcb_t *fcb, uint32_t sector_num, uint32_t sequence, uint16_t data_start, uint8_t status)
 {
     if (!fcb || sector_num >= fcb->config.num_sectors) return FCB_INVALID_ARG;
     fcb_sector_hdr_t hdr;
     hdr.magic = FCB_SECTOR_MAGIC;
     hdr.sequence = sequence;
+    hdr.data_start = data_start;
     hdr.status = status;
     memset(hdr.reserved, 0xFF, sizeof(hdr.reserved));
     uint32_t addr = fcb->config.start_addr + (sector_num * fcb->config.sector_size);
@@ -428,7 +429,7 @@ static int fcb_init_format_initial(fcb_t *fcb)
         return rc;
     }
     
-    rc = write_sector_header(fcb, fcb->write_sector, fcb->next_sequence, FCB_SECTOR_STATUS_VALID);
+    rc = write_sector_header(fcb, fcb->write_sector, fcb->next_sequence, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
     if (rc == FCB_OK)
     {
         fcb->next_sequence = 2; // Sector 0 is Seq 1, next sector should be Seq 2
@@ -456,8 +457,7 @@ static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector
             break; 
         }
 
-        uint32_t offset = FCB_SECTOR_HDR_SIZE + overflow;
-        overflow = 0; 
+        uint32_t offset = sec_hdr.data_start;
 
         if (sec_hdr.status == FCB_SECTOR_STATUS_CONSUMED)
         {
@@ -592,7 +592,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
         int rc = erase_sector(fcb, next_sector);
         if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
 
-        rc = write_sector_header(fcb, next_sector, fcb->next_sequence++, FCB_SECTOR_STATUS_VALID);
+        rc = write_sector_header(fcb, next_sector, fcb->next_sequence++, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
         if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
 
         fcb->write_sector = next_sector;
@@ -633,7 +633,10 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
         rc = erase_sector(fcb, next_sector);
         if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
 
-        rc = write_sector_header(fcb, next_sector, fcb->next_sequence++, FCB_SECTOR_STATUS_VALID);
+        uint16_t spill = (uint16_t)((len - bytes_to_write_current) + 1); // 1 for CRC
+        uint16_t data_start_val = FCB_SECTOR_HDR_SIZE + spill;
+
+        rc = write_sector_header(fcb, next_sector, fcb->next_sequence++, data_start_val, FCB_SECTOR_STATUS_VALID);
         if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
 
         curr_sector = next_sector;
