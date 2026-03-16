@@ -444,7 +444,10 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
         {
             fcb_record_hdr_t rec_hdr;
             rc = read_record_header(fcb, curr_sector, offset, &rec_hdr);
-            if (rc != FCB_OK || rec_hdr.magic != FCB_RECORD_MAGIC) break; // limit
+            if (rc != FCB_OK || rec_hdr.magic != FCB_RECORD_MAGIC)
+            {
+                break; // limit
+            }
 
             uint32_t total_record_len = FCB_RECORD_HDR_SIZE + rec_hdr.length + 1; // 1B CRC8 following data
             uint32_t avail_in_sector = fcb->config.sector_size - offset;
