@@ -2,30 +2,6 @@
  * @file  fcb.h
  * @brief Flash Circular Buffer (FCB) — a power-fail-safe circular FIFO
  *        on SPI NOR flash memory.
- *
- * Design considerations for power-fail safety:
- *
- *   1. NOR flash can only program bits from 1→0.  Only a sector erase
- *      restores bits to 1.  This property is exploited for the "consumed"
- *      flag: writing 0x00 over 0xFF is always safe and atomic.
- *
- *   2. Every write operation is ordered so that a power loss at ANY point
- *      leaves the structure recoverable:
- *        - Sector headers are written first; if power fails mid-write the
- *          magic will not match and the sector is treated as erased.
- *        - Record headers are written before data; if power fails after the
- *          header but before data completes, CRC validation will fail and
- *          the record is discarded during recovery.
- *        - The CRC covers data only (not the header), so any partial data
- *          write is detectable.
- *
- *   3. Recovery (fcb_init) scans sector headers to find the logical order
- *      via monotonic sequence numbers, then walks records to locate the
- *      exact head (oldest unconsumed) and tail (end of newest valid data).
- *
- * RAM usage: only the fcb_t struct itself (~100 bytes of state).
- *            No large buffers, no lookup tables.
- *
  * @note C99 compliant.  All public fields for inspection/debug.
  */
 
