@@ -928,7 +928,7 @@ int fcb_trim(fcb_t *fcb)
     }
 
     /* Mark as consumed in sector header for recovery aid */
-    uint32_t addr = fcb->config.start_addr + (oldest_sector * fcb->config.sector_size) + 8; // Status offset
+    uint32_t addr = fcb->config.start_addr + (oldest_sector * fcb->config.sector_size) + 10; // Status offset
     uint8_t consumed = FCB_SECTOR_STATUS_CONSUMED;
     int rc = fcb_flash_program(fcb, addr, &consumed, 1);
     if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }

@@ -26,8 +26,9 @@ Located at the beginning of every sector.
 | :--- | :--- | :--- | :--- |
 | 0 | 4 | `magic` | `0x0FCBF1F0` ensures the sector is a valid FCB sector. |
 | 4 | 4 | `sequence` | Monotonically increasing number used to determine logical order. |
-| 8 | 1 | `status` | `0xFF` (erased/valid) or `0x00` (consumed). |
-| 9 | 7 | `reserved` | Future use. |
+| 8 | 2 | `data_start` | Offset from sector start to the first NEW record header. |
+| 10 | 1 | `status` | `0xFF` (erased/valid) or `0x00` (consumed). |
+| 11 | 5 | `reserved` | Future use. |
 
 #### Record Header (4 bytes)
 Located sequentially within the sector. Each record header is followed by the record data and a CRC-8 byte.
@@ -106,7 +107,8 @@ Upon initialization, the FCB performs a full recovery scan:
 
 ### 3.4 Consuming and Deleting (`fcb_delete`)
 *   Marks records as consumed by writing `0x00` into the `status` flag in the Record Header.
-*   Advances `delete_ptr` appropriately.
+*   Marks **all** records from `delete_ptr` up to `read_ptr` in a loop (batch deletion).
+*   Advances `delete_ptr` accordingly.
 
 ### 3.5 Sector Trim (`fcb_trim`)
 *   Erases sectors only when all records within them are marked as consumed.
@@ -120,7 +122,7 @@ Upon initialization, the FCB performs a full recovery scan:
 | `fcb_init` | Mounts the FCB and performs recovery scan. |
 | `fcb_write` | Appends a new record to the buffer. |
 | `fcb_read` | Peeks at the oldest unconsumed record. |
-| `fcb_delete` | Marks the oldest unconsumed record as consumed. |
+| `fcb_delete` | Marks all records between delete_ptr and read_ptr as consumed. |
 | `fcb_trim` | Erases the oldest sector if fully consumed. |
 | `fcb_is_full` | Checks if the buffer has room for a max-size record. |
 | `fcb_is_empty` | Checks if there are any unconsumed records. |

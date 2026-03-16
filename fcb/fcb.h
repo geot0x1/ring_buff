@@ -56,8 +56,9 @@ extern "C" {
  *   Offset  Size  Field
  *   0       4     magic       (0x0FCBF1F0)
  *   4       4     sequence    (monotonic, increases forever)
- *   8       1     status      (0xFF = erased, 0xAA = valid)
- *   9       7     reserved
+ *   8       2     data_start  (offset to first new record)
+ *   10      1     status      (0xFF = erased, 0x00 = consumed)
+ *   11      5     reserved
  */
 #pragma pack(push, 1)
 typedef struct
