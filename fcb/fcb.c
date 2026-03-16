@@ -133,12 +133,17 @@ static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
 /**
  * Read a sector header from flash at the start of the given sector.
  *
+ * Validates that the read data matches the expected sector header format:
+ *   - Magic field must equal FCB_SECTOR_MAGIC (0x0FCBF1F0)
+ *   - Status must be one of: 0xFF (erased), 0xAA (valid), or 0x00 (consumed)
+ *
  * @param fcb        Initialised FCB instance.
  * @param sector_num Sector number (0..num_sectors-1).
  * @param hdr        Pointer to fcb_sector_hdr_t where header will be stored.
  *
  * @return FCB_OK on success, FCB_INVALID_ARG if sector_num is out of range or hdr is NULL,
- *         or FCB_ERR_FLASH if the flash read operation fails.
+ *         FCB_CORRUPTED if the read data is invalid, or FCB_ERR_FLASH if the 
+ *         flash read operation fails.
  */
 static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
                               fcb_sector_hdr_t *hdr)
@@ -161,6 +166,20 @@ static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
     if (rc != 0)
     {
         return FCB_ERR_FLASH;
+    }
+
+    /* Sanity check: validate magic value */
+    if (hdr->magic != FCB_SECTOR_MAGIC)
+    {
+        return FCB_CORRUPTED;
+    }
+
+    /* Sanity check: validate status field */
+    if (hdr->status != FCB_SECTOR_STATUS_ERASED &&
+        hdr->status != FCB_SECTOR_STATUS_VALID &&
+        hdr->status != FCB_SECTOR_STATUS_CONSUMED)
+    {
+        return FCB_CORRUPTED;
     }
 
     return FCB_OK;
