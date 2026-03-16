@@ -74,8 +74,8 @@ static void test_fcb_init_empty_flash(void)
     // but I'll add a print to highlight the discrepancy.
     printf("  fcb.next_sequence: %u\n", fcb.next_sequence);
     
-    assert(fcb.write_ptr_sector == 0);
-    assert(fcb.write_ptr_offset == FCB_SECTOR_HDR_SIZE);
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE);
     
     printf("Passed test_fcb_init_empty_flash\n");
 }
@@ -125,12 +125,12 @@ static void test_fcb_init_sequence_order(void)
     assert(fcb.next_sequence == 13);
     
     // With no records, write_ptr should be at newest_sector (Sector 1)
-    assert(fcb.write_ptr_sector == 1);
-    assert(fcb.write_ptr_offset == FCB_SECTOR_HDR_SIZE);
+    assert(fcb.write_sector == 1);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE);
     
     // read_ptr and delete_ptr should also match write_ptr when empty
-    assert(fcb.read_ptr_sector == 1);
-    assert(fcb.read_ptr_offset == FCB_SECTOR_HDR_SIZE);
+    assert(fcb.read_sector == 1);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
     
     printf("Passed test_fcb_init_sequence_order\n");
 }
@@ -178,12 +178,12 @@ static void test_fcb_init_with_records(void)
     
     // write_ptr should be advanced past the record
     // 16 (hdr) + 4 (rec_hdr) + 10 (len) + 1 (crc) = 31
-    assert(fcb.write_ptr_sector == 0);
-    assert(fcb.write_ptr_offset == 31);
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == 31);
     
     // read_ptr should be at the first active record
-    assert(fcb.read_ptr_sector == 0);
-    assert(fcb.read_ptr_offset == FCB_SECTOR_HDR_SIZE);
+    assert(fcb.read_sector == 0);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
     
     printf("Passed test_fcb_init_with_records\n");
 }

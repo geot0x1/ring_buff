@@ -156,14 +156,14 @@ typedef struct
       * write_ptr:  Points to the next sequential address where the next record
      *             (Header + Data + CRC8) will be written.
      */
-    uint32_t delete_ptr_sector;   /**< Sector index of the delete pointer (0..num_sectors-1).        */
-    uint32_t delete_ptr_offset;   /**< Byte offset within delete_ptr_sector (after sector header).   */
+    uint32_t delete_sector;       /**< Sector index of the delete pointer (0..num_sectors-1).        */
+    uint32_t delete_offset;       /**< Byte offset within delete_ptr_sector (after sector header).   */
 
-    uint32_t read_ptr_sector;     /**< Sector index of the read pointer (0..num_sectors-1).          */
-    uint32_t read_ptr_offset;     /**< Byte offset within read_ptr_sector (after sector header).     */
+    uint32_t read_sector;         /**< Sector index of the read pointer (0..num_sectors-1).          */
+    uint32_t read_offset;         /**< Byte offset within read_ptr_sector (after sector header).     */
 
-    uint32_t write_ptr_sector;    /**< Sector index where the next record will be written.           */
-    uint32_t write_ptr_offset;    /**< Byte offset within write_ptr_sector (next free byte).         */
+    uint32_t write_sector;        /**< Sector index where the next record will be written.           */
+    uint32_t write_offset;        /**< Byte offset within write_ptr_sector (next free byte).         */
 
     uint32_t next_sequence;       /**< Next monotonic sequence number to assign.                      */
 

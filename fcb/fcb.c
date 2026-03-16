@@ -150,12 +150,12 @@ static int fcb_init_validate_config(const fcb_config_t *cfg)
  */
 static void fcb_init_empty_state(fcb_t *fcb)
 {
-    fcb->delete_ptr_sector = 0;
-    fcb->delete_ptr_offset = FCB_SECTOR_HDR_SIZE;
-    fcb->read_ptr_sector = 0;
-    fcb->read_ptr_offset = FCB_SECTOR_HDR_SIZE;
-    fcb->write_ptr_sector = 0;
-    fcb->write_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    fcb->delete_sector = 0;
+    fcb->delete_offset = FCB_SECTOR_HDR_SIZE;
+    fcb->read_sector = 0;
+    fcb->read_offset = FCB_SECTOR_HDR_SIZE;
+    fcb->write_sector = 0;
+    fcb->write_offset = FCB_SECTOR_HDR_SIZE;
     fcb->next_sequence = 1;
     fcb->magic = FCB_INIT_MAGIC;
     fcb->is_mounted = true;
@@ -473,10 +473,10 @@ static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector
 
             if (rec_hdr.status == FCB_RECORD_ACTIVE && !read_ptr_found)
             {
-                fcb->read_ptr_sector = curr_sector;
-                fcb->read_ptr_offset = offset;
-                fcb->delete_ptr_sector = curr_sector;
-                fcb->delete_ptr_offset = offset;
+                fcb->read_sector = curr_sector;
+                fcb->read_offset = offset;
+                fcb->delete_sector = curr_sector;
+                fcb->delete_offset = offset;
                 read_ptr_found = true;
             }
 
@@ -496,15 +496,15 @@ static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector
 
         if (curr_sector == (uint32_t)newest_sector)
         {
-            fcb->write_ptr_sector = last_valid_sector;
+            fcb->write_sector = last_valid_sector;
             if (overflow > 0)
             {
-                fcb->write_ptr_sector = (curr_sector + 1) % fcb->config.num_sectors;
-                fcb->write_ptr_offset = FCB_SECTOR_HDR_SIZE + overflow;
+                fcb->write_sector = (curr_sector + 1) % fcb->config.num_sectors;
+                fcb->write_offset = FCB_SECTOR_HDR_SIZE + overflow;
             }
             else
             {
-                fcb->write_ptr_offset = last_valid_offset;
+                fcb->write_offset = last_valid_offset;
             }
             break; 
         }
@@ -514,10 +514,10 @@ static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector
 
     if (!read_ptr_found)
     {
-        fcb->read_ptr_sector = fcb->write_ptr_sector;
-        fcb->read_ptr_offset = fcb->write_ptr_offset;
-        fcb->delete_ptr_sector = fcb->write_ptr_sector;
-        fcb->delete_ptr_offset = fcb->write_ptr_offset;
+        fcb->read_sector = fcb->write_sector;
+        fcb->read_offset = fcb->write_offset;
+        fcb->delete_sector = fcb->write_sector;
+        fcb->delete_offset = fcb->write_offset;
     }
 
     return FCB_OK;
@@ -569,13 +569,13 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     uint32_t total_len = header_len + len + 1; // 1B CRC8 following data
     uint32_t sector_size = fcb->config.sector_size;
     
-    uint32_t avail = sector_size - fcb->write_ptr_offset;
+    uint32_t avail = sector_size - fcb->write_offset;
 
     /* 1. If header cannot fit, move to next sector immediately */
     if (header_len > avail)
     {
-        uint32_t next_sector = (fcb->write_ptr_sector + 1) % fcb->config.num_sectors;
-        if (next_sector == fcb->read_ptr_sector)
+        uint32_t next_sector = (fcb->write_sector + 1) % fcb->config.num_sectors;
+        if (next_sector == fcb->read_sector)
         {
             fcb_unlock(fcb);
             return FCB_FULL; // Buffer is full
@@ -587,13 +587,13 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
         rc = write_sector_header(fcb, next_sector, fcb->next_sequence++, FCB_SECTOR_STATUS_VALID);
         if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
 
-        fcb->write_ptr_sector = next_sector;
-        fcb->write_ptr_offset = FCB_SECTOR_HDR_SIZE;
+        fcb->write_sector = next_sector;
+        fcb->write_offset = FCB_SECTOR_HDR_SIZE;
         avail = sector_size - FCB_SECTOR_HDR_SIZE;
     }
 
-    uint32_t curr_sector = fcb->write_ptr_sector;
-    uint32_t curr_offset = fcb->write_ptr_offset;
+    uint32_t curr_sector = fcb->write_sector;
+    uint32_t curr_offset = fcb->write_offset;
 
     /* 2. Write Record Header */
     int rc = write_record_header(fcb, curr_sector, curr_offset, len);
@@ -616,7 +616,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
 
         /* Advance to next sector for the rest of data */
         uint32_t next_sector = (curr_sector + 1) % fcb->config.num_sectors;
-        if (next_sector == fcb->read_ptr_sector)
+        if (next_sector == fcb->read_sector)
         {
              fcb_unlock(fcb);
              return FCB_FULL; // buffer full on split write
@@ -656,8 +656,8 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
 
     /* 5. Update write_ptr */
-    fcb->write_ptr_sector = curr_sector;
-    fcb->write_ptr_offset = data_addr_offset + 1;
+    fcb->write_sector = curr_sector;
+    fcb->write_offset = data_addr_offset + 1;
 
     fcb_unlock(fcb);
     return FCB_OK;
@@ -667,8 +667,8 @@ static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len
 {
     if (fcb_is_empty(fcb)) return FCB_EMPTY;
 
-    uint32_t curr_sector = fcb->read_ptr_sector;
-    uint32_t curr_offset = fcb->read_ptr_offset;
+    uint32_t curr_sector = fcb->read_sector;
+    uint32_t curr_offset = fcb->read_offset;
     uint32_t sector_size = fcb->config.sector_size;
 
     fcb_record_hdr_t hdr;
@@ -718,8 +718,8 @@ static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len
     if (read_crc != calc_crc) return FCB_CORRUPTED;
 
     /* 3. Advance read_ptr */
-    fcb->read_ptr_sector = curr_sector;
-    fcb->read_ptr_offset = data_addr_offset + 1; // Past CRC
+    fcb->read_sector = curr_sector;
+    fcb->read_offset = data_addr_offset + 1; // Past CRC
 
     if (len_out) *len_out = hdr.length;
     return FCB_OK;
@@ -744,41 +744,41 @@ int fcb_delete(fcb_t *fcb)
 {
     if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted) return FCB_INVALID_ARG;
 
-    if (fcb->delete_ptr_sector == fcb->read_ptr_sector && fcb->delete_ptr_offset == fcb->read_ptr_offset)
+    if (fcb->delete_sector == fcb->read_sector && fcb->delete_offset == fcb->read_offset)
     {
         return FCB_EMPTY; // Nothing to delete
     }
 
     fcb_lock(fcb);
 
-    while (fcb->delete_ptr_sector != fcb->read_ptr_sector || fcb->delete_ptr_offset != fcb->read_ptr_offset)
+    while (fcb->delete_sector != fcb->read_sector || fcb->delete_offset != fcb->read_offset)
     {
         fcb_record_hdr_t hdr;
-        int rc = read_record_header(fcb, fcb->delete_ptr_sector, fcb->delete_ptr_offset, &hdr);
+        int rc = read_record_header(fcb, fcb->delete_sector, fcb->delete_offset, &hdr);
         if (rc != FCB_OK || hdr.magic != FCB_RECORD_MAGIC) { fcb_unlock(fcb); return FCB_CORRUPTED; }
 
         if (hdr.status != FCB_RECORD_CONSUMED)
         {
             uint8_t consumed_flag = FCB_RECORD_CONSUMED;
             uint32_t addr = fcb->config.start_addr + 
-                            (fcb->delete_ptr_sector * fcb->config.sector_size) + 
-                            fcb->delete_ptr_offset + 3; // offset to status
+                            (fcb->delete_sector * fcb->config.sector_size) + 
+                            fcb->delete_offset + 3; // offset to status
             rc = fcb_flash_program(fcb, addr, &consumed_flag, 1);
             if (rc != FCB_OK) { fcb_unlock(fcb); return rc; }
         }
 
         uint32_t total_len = FCB_RECORD_HDR_SIZE + hdr.length + 1;
-        uint32_t avail = fcb->config.sector_size - fcb->delete_ptr_offset;
+        uint32_t avail = fcb->config.sector_size - fcb->delete_offset;
 
         if (total_len > avail)
         {
              uint32_t overflow = total_len - avail;
-             fcb->delete_ptr_sector = (fcb->delete_ptr_sector + 1) % fcb->config.num_sectors;
-             fcb->delete_ptr_offset = FCB_SECTOR_HDR_SIZE + overflow;
+             fcb->delete_sector = (fcb->delete_sector + 1) % fcb->config.num_sectors;
+             fcb->delete_offset = FCB_SECTOR_HDR_SIZE + overflow;
         }
         else
         {
-             fcb->delete_ptr_offset += total_len;
+             fcb->delete_offset += total_len;
         }
     }
 
@@ -792,12 +792,12 @@ int fcb_trim(fcb_t *fcb)
 
     fcb_lock(fcb);
 
-    /* 1. Identify "oldest" sector. If delete_ptr_sector is not fully consumed, we can't trim */
-    uint32_t oldest_sector = fcb->delete_ptr_sector;
+    /* 1. Identify "oldest" sector. If delete_sector is not fully consumed, we can't trim */
+    uint32_t oldest_sector = fcb->delete_sector;
 
     /* Sector trim requires all records of that sector to be consumed. 
        If read_ptr is in the SAME sector as delete_ptr, it means some records may be unread. */
-    if (fcb->read_ptr_sector == oldest_sector && fcb->read_ptr_offset != fcb->delete_ptr_offset)
+    if (fcb->read_sector == oldest_sector && fcb->read_offset != fcb->delete_offset)
     {
          fcb_unlock(fcb);
          return FCB_NOT_CONSUMED; // Some records are unread
@@ -814,13 +814,13 @@ int fcb_trim(fcb_t *fcb)
 
     /* Advance delete_ptr to next sector if it was pointing at the erased sector's boundary */
     uint32_t next_sector = (oldest_sector + 1) % fcb->config.num_sectors;
-    fcb->delete_ptr_sector = next_sector;
-    fcb->delete_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    fcb->delete_sector = next_sector;
+    fcb->delete_offset = FCB_SECTOR_HDR_SIZE;
 
-    if (fcb->read_ptr_sector == oldest_sector)
+    if (fcb->read_sector == oldest_sector)
     {
-         fcb->read_ptr_sector = next_sector;
-         fcb->read_ptr_offset = FCB_SECTOR_HDR_SIZE;
+         fcb->read_sector = next_sector;
+         fcb->read_offset = FCB_SECTOR_HDR_SIZE;
     }
 
     fcb_unlock(fcb);
@@ -831,11 +831,11 @@ bool fcb_is_full(const fcb_t *fcb)
 {
     if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted) return true;
 
-    uint32_t next_sector = (fcb->write_ptr_sector + 1) % fcb->config.num_sectors;
-    if (next_sector == fcb->read_ptr_sector)
+    uint32_t next_sector = (fcb->write_sector + 1) % fcb->config.num_sectors;
+    if (next_sector == fcb->read_sector)
     {
         /* Check if current free space cannot fit a max record */
-        if (fcb->config.sector_size - fcb->write_ptr_offset < FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE + 1)
+        if (fcb->config.sector_size - fcb->write_offset < FCB_RECORD_HDR_SIZE + FCB_MAX_RECORD_SIZE + 1)
         {
             return true;
         }
@@ -848,6 +848,6 @@ bool fcb_is_empty(const fcb_t *fcb)
 {
     if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted) return true;
 
-    return fcb->read_ptr_sector == fcb->write_ptr_sector && fcb->read_ptr_offset == fcb->write_ptr_offset;
+    return fcb->read_sector == fcb->write_sector && fcb->read_offset == fcb->write_offset;
 }
 
