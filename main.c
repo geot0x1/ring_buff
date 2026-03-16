@@ -392,6 +392,71 @@ void test_sector_erase_detection(void)
     }
 }
 
+/* ================================================================== */
+/*  Test 5: Read returns FCB_EMPTY on empty FIFO                      */
+/* ================================================================== */
+
+void test_fcb_read_returns_empty_on_empty_fifo(void)
+{
+    printf("\n=== Test 5: Read Returns FCB_EMPTY on Empty FIFO ===\n");
+
+    /* Initialize fresh flash */
+    flash_init();
+
+    fcb_config_t cfg =
+    {
+        .start_addr          = 0x0,
+        .num_sectors         = 4,
+        .sector_size         = FLASH_SECTOR_SIZE,
+        .flash_ctx           = NULL,
+        .flash_read          = sim_flash_read,
+        .flash_program       = sim_flash_program,
+        .flash_erase_sector  = sim_flash_erase_sector,
+        .lock                = NULL,
+        .unlock              = NULL,
+        .mutex_ctx           = NULL,
+    };
+
+    /* Initialize FCB on completely erased flash */
+    fcb_t fcb;
+    int rc = fcb_init(&fcb, &cfg);
+    printf("FCB initialized: %s (result=%d)\n", rc == FCB_OK ? "OK" : "FAILED", rc);
+    printf("FCB state:\n");
+    printf("  read_ptr: sector %u, offset %u\n", fcb.read_ptr_sector, fcb.read_ptr_offset);
+    printf("  write_ptr: sector %u, offset %u\n", fcb.write_ptr_sector, fcb.write_ptr_offset);
+
+    /* Verify that read and write pointers match (indicating empty) */
+    if (fcb.read_ptr_sector != fcb.write_ptr_sector ||
+        fcb.read_ptr_offset != fcb.write_ptr_offset)
+    {
+        printf("\nRESULT: FAIL - Read and write pointers should match on empty FIFO\n");
+        return;
+    }
+
+    printf("\n--- Attempting to read from empty FIFO ---\n");
+
+    /* Prepare buffer for read */
+    uint8_t read_buf[256];
+    size_t len_out = 0;
+
+    /* Attempt to read from empty FIFO */
+    int read_rc = fcb_read(&fcb, read_buf, sizeof(read_buf), &len_out);
+
+    printf("fcb_read result: %d\n", read_rc);
+    printf("Expected: %d (FCB_EMPTY)\n", FCB_EMPTY);
+    printf("len_out: %zu (should be unchanged/0)\n", len_out);
+
+    /* Verify result */
+    if (read_rc == FCB_EMPTY)
+    {
+        printf("\nRESULT: PASS - Read correctly returns FCB_EMPTY on empty FIFO!\n");
+    }
+    else
+    {
+        printf("\nRESULT: FAIL - Read should return FCB_EMPTY on empty FIFO, got %d\n", read_rc);
+    }
+}
+
 int main(void)
 {
     printf("================================================\n");
@@ -402,6 +467,7 @@ int main(void)
     test_fcb_init_empty_buffer();
     test_fcb_init_mixed_sectors();
     test_sector_erase_detection();
+    test_fcb_read_returns_empty_on_empty_fifo();
 
     printf("\n================================================\n");
     printf("All simulation tests completed\n");
