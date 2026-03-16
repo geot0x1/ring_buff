@@ -1158,7 +1158,7 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 }
 
 /* ================================================================== */
-/*  fcb_delete — consume ALL records in the buffer                     */
+/*  fcb_delete — mark records from delete_ptr to read_ptr as consumed   */
 /* ================================================================== */
 
 int fcb_delete(fcb_t *fcb)
@@ -1170,16 +1170,17 @@ int fcb_delete(fcb_t *fcb)
 
     fcb_lock(fcb);
 
-    /* Nothing to delete when the buffer is empty. */
-    if (fcb->delete_ptr_sector == fcb->write_ptr_sector &&
-        fcb->delete_ptr_offset == fcb->write_ptr_offset)
+    /* Nothing to delete when delete_ptr == read_ptr (no new reads since last delete). */
+    if (fcb->delete_ptr_sector == fcb->read_ptr_sector &&
+        fcb->delete_ptr_offset == fcb->read_ptr_offset)
     {
         fcb_unlock(fcb);
         return FCB_EMPTY;
     }
 
-    while (!(fcb->delete_ptr_sector == fcb->write_ptr_sector &&
-             fcb->delete_ptr_offset == fcb->write_ptr_offset))
+    /* Mark all records from delete_ptr up to read_ptr as consumed. */
+    while (!(fcb->delete_ptr_sector == fcb->read_ptr_sector &&
+             fcb->delete_ptr_offset == fcb->read_ptr_offset))
     {
         fcb_record_hdr_t rhdr;
         uint32_t hdr_addr = sector_addr(fcb, fcb->delete_ptr_sector) + fcb->delete_ptr_offset;
@@ -1218,10 +1219,6 @@ int fcb_delete(fcb_t *fcb)
         fcb->delete_ptr_sector = next_delete_sec;
         fcb->delete_ptr_offset = next_delete_off;
     }
-
-    /* All entries deleted — read_ptr catches up to write_ptr. */
-    fcb->read_ptr_sector = fcb->write_ptr_sector;
-    fcb->read_ptr_offset = fcb->write_ptr_offset;
 
     fcb_unlock(fcb);
     return FCB_OK;

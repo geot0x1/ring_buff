@@ -175,13 +175,12 @@ typedef struct
      * Three-pointer FIFO architecture:
      *   delete_ptr → read_ptr → write_ptr (circular order)
      * 
-     * delete_ptr: Points to the first item to be deleted. When fcb_delete() 
-     *             is called, it deletes ALL items from here up to write_ptr,
-     *             marking every record consumed. After completion,
-     *             delete_ptr == read_ptr == write_ptr (buffer empty).
+     * delete_ptr: Points to the first unconsumed (unpublished) record. When fcb_delete()
+     *             is called, it marks records from here up to read_ptr as consumed,
+     *             then advances delete_ptr to read_ptr. Unread records remain intact.
      * 
      * read_ptr:   Points to the next unread record. fcb_read()
-     *             retrieves from here and advances this pointer.
+     *             retrieves from here and advances this pointer on each call.
      * 
      * write_ptr:  Points to where the next write will occur. fcb_write() 
      *             appends data here.
@@ -239,10 +238,16 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len);
 int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
 
 /**
- * @brief Delete all records that have been read.
+ * @brief Mark all records between delete_ptr and read_ptr as consumed.
  *
- * Deletes records from `delete_ptr` up to (but not including) `read_ptr`.
- * If `delete_ptr == read_ptr`, there is nothing pending deletion.
+ * Marks records from `delete_ptr` up to (but not including) `read_ptr` as consumed,
+ * then advances `delete_ptr` to match `read_ptr`. Unread records beyond `read_ptr`
+ * remain intact for future reads.
+ *
+ * Typical usage (telemetry): read items in a loop, then call delete once to mark
+ * all those reads as published/consumed.
+ *
+ * If `delete_ptr == read_ptr`, there is nothing new to delete (returns FCB_EMPTY).
  *
  * @param fcb  Initialised FCB instance.
  * @return FCB_OK, FCB_EMPTY, or FCB_ERR_FLASH.
