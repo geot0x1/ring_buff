@@ -1154,80 +1154,13 @@ static void fcb_advance_read_ptr_to_next(fcb_t *fcb, uint32_t current_sector,
     fcb->read_ptr_offset = next_offset;
 }
 
-/**
- * Read the next record from the FCB without locking.
- *
- * This is the internal implementation called by fcb_read after argument
- * validation and locking. It assumes the caller has already:
- *   - Validated all arguments
- *   - Acquired the mutex (via fcb_lock)
- *   - Caller is responsible for releasing the mutex (via fcb_unlock)
- *
- * Implementation:
- *   - Starts at read_ptr searching for the next valid record.
- *   - If the record at read_ptr is corrupted or missing, scans forward
- *     looking for the next valid record.
- *   - If 8 consecutive erased blocks are found, assumes no more data.
- *   - Respects write_ptr as a hard boundary (never advances past it).
- *
- * @param fcb       Initialised FCB instance (assumed valid).
- * @param buf       Output buffer for record data (assumed non-NULL).
- * @param buf_len   Size of output buffer (assumed > 0).
- * @param len_out   Pointer to store record length (assumed non-NULL).
- *
- * @return FCB_OK on success, FCB_EMPTY if no unread records,
- *         FCB_CORRUPTED if record is invalid, FCB_INVALID_ARG if 
- *         record doesn't fit in buffer, or FCB_ERR_FLASH if read fails.
- */
 static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 {
-    /* Check if buffer is empty (no unread records) */
-    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
-        fcb->read_ptr_offset == fcb->write_ptr_offset)
+
+    while (fcb->read_ptr_sector != fcb->write_ptr_sector || fcb->read_ptr_offset != fcb->write_ptr_offset)
     {
-        return FCB_EMPTY;
+
     }
-
-    uint32_t sector_num = fcb->read_ptr_sector;
-    uint32_t data_offset = fcb->read_ptr_offset;
-    fcb_record_hdr_t rec_hdr;
-
-    /* Try to find valid record starting at read_ptr */
-    int rc = fcb_find_record_header_for_offset(fcb, sector_num, data_offset, &rec_hdr);
-
-    /* If not found at current position, scan forward for next valid record or end of data */
-    if (rc != FCB_OK)
-    {
-        rc = scan_forward_to_next_record(fcb, &sector_num, &data_offset, &rec_hdr);
-        if (rc != FCB_OK)
-        {
-            return rc;  /* FCB_EMPTY or FCB_CORRUPTED */
-        }
-    }
-
-    /* Validate record length fits in output buffer */
-    if (rec_hdr.length > buf_len)
-    {
-        return FCB_INVALID_ARG;
-    }
-
-    /* Read record data from flash (handles sector spanning) */
-    rc = fcb_read_record_data_multipart(fcb, sector_num, data_offset,
-                                        rec_hdr.length, buf);
-    if (rc != FCB_OK)
-    {
-        return rc;
-    }
-
-    /* Return the record length */
-    *len_out = rec_hdr.length;
-
-    /* Advance read_ptr to the next record */
-    fcb_advance_read_ptr_to_next(fcb, sector_num, data_offset, rec_hdr.length);
-
-    FCB_LOG("Read record: sector=%u, offset=%u, length=%u\n",
-            sector_num, data_offset, rec_hdr.length);
-
     return FCB_OK;
 }
 
@@ -1285,5 +1218,5 @@ bool fcb_is_empty(const fcb_t *fcb)
         return true;  /* treat uninitialised as empty for safety */
     }
 
-    return true;
+    return fcb->read_ptr_sector == fcb->write_ptr_sector && fcb->read_ptr_offset == fcb->write_ptr_offset;
 }
