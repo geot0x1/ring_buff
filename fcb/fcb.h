@@ -68,7 +68,7 @@ typedef struct
     uint16_t data_start; /**< Offset from sector start to the first NEW record header */
     uint8_t  status;     /**< 0xFF: Valid, 0x00: Consumed                              */
     uint8_t  reserved[5];/**< Padding to 16 bytes                                      */
-} fcb_sector_hdr_t;
+} FcbSectorHdr;
 #pragma pack(pop)
 
 /**
@@ -85,7 +85,7 @@ typedef struct
     uint8_t  magic;
     uint16_t length;
     uint8_t  status;
-} fcb_record_hdr_t;
+} FcbRecordHdr;
 #pragma pack(pop)
 
 /* ------------------------------------------------------------------ */
@@ -102,7 +102,7 @@ typedef enum
     FCB_INVALID_ARG,
     FCB_POWER_LOSS_DETECTED,
     FCB_ERR_FLASH
-} fcb_error_t;
+} FcbError;
 
 /* ------------------------------------------------------------------ */
 /*  Configuration & state                                              */
@@ -136,14 +136,14 @@ typedef struct
     void (*unlock)(void *mutex_ctx);
 
     void *mutex_ctx;              /**< Opaque context forwarded to lock/unlock.     */
-} fcb_config_t;
+} FcbConfig;
 
 /**
  * FCB instance — all fields are public for inspection / debug.
  */
 typedef struct
 {
-    fcb_config_t config;
+    FcbConfig config;
 
     /**
      * Three-pointer FIFO architecture:
@@ -172,7 +172,7 @@ typedef struct
     uint32_t magic;               /**< Internal canary set after successful init (0xFCB0FCB0).       */
 
     bool     is_mounted;          /**< Indicates FCB is fully initialized and ready for use.          */
-} fcb_t;
+} Fcb;
 
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
@@ -188,7 +188,7 @@ typedef struct
  * @param cfg  Pointer to a fully populated fcb_config_t.
  * @return FCB_OK on success, or an appropriate fcb_error_t.
  */
-int fcb_init(fcb_t *fcb, const fcb_config_t *cfg);
+int fcb_init(Fcb *fcb, const FcbConfig *cfg);
 
 /**
  * @brief Append a record to the buffer.
@@ -198,7 +198,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg);
  * @param len   Length of the payload.
  * @return FCB_OK, FCB_FULL, FCB_INVALID_ARG, or FCB_ERR_FLASH.
  */
-int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len);
+int fcb_write(Fcb *fcb, const uint8_t *data, size_t len);
 
 /**
  * @brief Read the next unread record and advance the read pointer.
@@ -208,7 +208,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len);
  * @param len_out  On success, set to the record length.
  * @return FCB_OK, FCB_EMPTY, FCB_CORRUPTED, or FCB_ERR_FLASH.
  */
-int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
+int fcb_read(Fcb *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
 
 /**
  * @brief Mark all records between delete_ptr and read_ptr as consumed.
@@ -225,7 +225,7 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
  * @param fcb  Initialised FCB instance.
  * @return FCB_OK, FCB_EMPTY, or FCB_ERR_FLASH.
  */
-int fcb_delete(fcb_t *fcb);
+int fcb_delete(Fcb *fcb);
 
 /**
  * @brief Erase the oldest sector, but ONLY if all its records are consumed.
@@ -233,17 +233,17 @@ int fcb_delete(fcb_t *fcb);
  * @param fcb  Initialised FCB instance.
  * @return FCB_OK, FCB_NOT_CONSUMED, FCB_EMPTY, or FCB_ERR_FLASH.
  */
-int fcb_trim(fcb_t *fcb);
+int fcb_trim(Fcb *fcb);
 
 /**
  * @brief Check whether the buffer has no room for another max-size record.
  */
-bool fcb_is_full(const fcb_t *fcb);
+bool fcb_is_full(const Fcb *fcb);
 
 /**
  * @brief Check whether the buffer contains zero unconsumed records.
  */
-bool fcb_is_empty(const fcb_t *fcb);
+bool fcb_is_empty(const Fcb *fcb);
 
 #ifdef __cplusplus
 }

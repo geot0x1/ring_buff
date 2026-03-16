@@ -28,7 +28,7 @@ static int sim_flash_erase_sector(void *ctx, uint32_t addr)
     return flash_erase_sector(addr);
 }
 
-static void setup_config(fcb_config_t *cfg)
+static void setup_config(FcbConfig *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
     cfg->start_addr = 0;
@@ -53,8 +53,8 @@ static void test_fcb_init_empty_flash(void)
     printf("Running test_fcb_init_empty_flash...\n");
     flash_init(); // Erase all
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     int rc = fcb_init(&fcb, &cfg);
@@ -78,12 +78,12 @@ static void test_fcb_init_sequence_order(void)
     printf("Running test_fcb_init_sequence_order...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Manually write sector headers to simulate wrapped buffer
-    fcb_sector_hdr_t hdr;
+    FcbSectorHdr hdr;
     hdr.magic = FCB_SECTOR_MAGIC;
     hdr.status = FCB_SECTOR_STATUS_VALID;
     hdr.data_start = FCB_SECTOR_HDR_SIZE; // Fixed initialized header offset
@@ -134,12 +134,12 @@ static void test_fcb_init_with_records(void)
     printf("Running test_fcb_init_with_records...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Sector 0: Seq 1
-    fcb_sector_hdr_t shdr;
+    FcbSectorHdr shdr;
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 1;
     shdr.status = FCB_SECTOR_STATUS_VALID;
@@ -148,7 +148,7 @@ static void test_fcb_init_with_records(void)
     flash_write(0, &shdr, sizeof(shdr));
     
     // Write a record to Sector 0
-    fcb_record_hdr_t rhdr;
+    FcbRecordHdr rhdr;
     rhdr.magic = FCB_RECORD_MAGIC;
     rhdr.length = 10;
     rhdr.status = FCB_RECORD_ACTIVE;
@@ -186,7 +186,7 @@ static void test_fcb_init_invalid_args(void)
 {
     printf("Running test_fcb_init_invalid_args...\n");
     
-    fcb_config_t cfg;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // NULL fcb
@@ -194,7 +194,7 @@ static void test_fcb_init_invalid_args(void)
     assert(rc == FCB_INVALID_ARG);
     
     // NULL cfg
-    fcb_t fcb;
+    Fcb fcb;
     rc = fcb_init(&fcb, NULL);
     assert(rc == FCB_INVALID_ARG);
     
@@ -208,8 +208,8 @@ static void test_fcb_init_invalid_config(void)
 {
     printf("Running test_fcb_init_invalid_config...\n");
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // cfg->num_sectors = 0
@@ -260,12 +260,12 @@ static void test_fcb_init_corrupt_flash(void)
     printf("Running test_fcb_init_corrupt_flash...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Write a sector header with BAD MAGIC
-    fcb_sector_hdr_t hdr;
+    FcbSectorHdr hdr;
     hdr.magic = 0xDEADC0DE; // Bad magic
     hdr.sequence = 1;
     hdr.status = FCB_SECTOR_STATUS_VALID;
@@ -296,12 +296,12 @@ static void test_fcb_init_recover_single_sector_full(void)
     printf("Running test_fcb_init_recover_single_sector_full...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Sector 0: Seq 5
-    fcb_sector_hdr_t shdr;
+    FcbSectorHdr shdr;
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 5;
     shdr.status = FCB_SECTOR_STATUS_VALID;
@@ -311,7 +311,7 @@ static void test_fcb_init_recover_single_sector_full(void)
     
     // Write 3 records to fill some space
     uint32_t offset = FCB_SECTOR_HDR_SIZE;
-    fcb_record_hdr_t rhdr;
+    FcbRecordHdr rhdr;
     rhdr.magic = FCB_RECORD_MAGIC;
     rhdr.length = 20;
     rhdr.status = FCB_RECORD_ACTIVE;
@@ -345,12 +345,12 @@ static void test_fcb_init_recover_single_sector_mixed(void)
     printf("Running test_fcb_init_recover_single_sector_mixed...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Sector 0: Seq 5
-    fcb_sector_hdr_t shdr;
+    FcbSectorHdr shdr;
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 5;
     shdr.status = FCB_SECTOR_STATUS_VALID;
@@ -359,7 +359,7 @@ static void test_fcb_init_recover_single_sector_mixed(void)
     flash_write(0, &shdr, sizeof(shdr));
     
     uint32_t offset = FCB_SECTOR_HDR_SIZE;
-    fcb_record_hdr_t rhdr;
+    FcbRecordHdr rhdr;
     rhdr.magic = FCB_RECORD_MAGIC;
     rhdr.length = 10;
     
@@ -399,12 +399,12 @@ static void test_fcb_init_recover_chain_no_active(void)
     printf("Running test_fcb_init_recover_chain_no_active...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Sector 0: Seq 1
-    fcb_sector_hdr_t shdr;
+    FcbSectorHdr shdr;
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 1;
     shdr.status = FCB_SECTOR_STATUS_VALID;
@@ -418,7 +418,7 @@ static void test_fcb_init_recover_chain_no_active(void)
     
     // Write consumed records to Sector 0
     uint32_t offset = FCB_SECTOR_HDR_SIZE;
-    fcb_record_hdr_t rhdr;
+    FcbRecordHdr rhdr;
     rhdr.magic = FCB_RECORD_MAGIC;
     rhdr.length = 10;
     rhdr.status = FCB_RECORD_CONSUMED;
@@ -453,12 +453,12 @@ static void test_fcb_init_recover_with_consumed_sector(void)
     printf("Running test_fcb_init_recover_with_consumed_sector...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Sector 0: Seq 1, Status = CONSUMED
-    fcb_sector_hdr_t shdr;
+    FcbSectorHdr shdr;
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 1;
     shdr.status = FCB_SECTOR_STATUS_CONSUMED;
@@ -473,7 +473,7 @@ static void test_fcb_init_recover_with_consumed_sector(void)
     
     // Write an active record to Sector 1
     uint32_t offset1 = cfg.sector_size + FCB_SECTOR_HDR_SIZE;
-    fcb_record_hdr_t rhdr;
+    FcbRecordHdr rhdr;
     rhdr.magic = FCB_RECORD_MAGIC;
     rhdr.length = 10;
     rhdr.status = FCB_RECORD_ACTIVE;
@@ -502,12 +502,12 @@ static void test_fcb_init_recover_with_corrupt_record(void)
     printf("Running test_fcb_init_recover_with_corrupt_record...\n");
     flash_init();
     
-    fcb_t fcb;
-    fcb_config_t cfg;
+    Fcb fcb;
+    FcbConfig cfg;
     setup_config(&cfg);
     
     // Sector 0: Seq 1
-    fcb_sector_hdr_t shdr;
+    FcbSectorHdr shdr;
     shdr.magic = FCB_SECTOR_MAGIC;
     shdr.sequence = 1;
     shdr.status = FCB_SECTOR_STATUS_VALID;
@@ -516,7 +516,7 @@ static void test_fcb_init_recover_with_corrupt_record(void)
     flash_write(0, &shdr, sizeof(shdr));
     
     uint32_t offset = FCB_SECTOR_HDR_SIZE;
-    fcb_record_hdr_t rhdr;
+    FcbRecordHdr rhdr;
     rhdr.magic = FCB_RECORD_MAGIC;
     rhdr.length = 10;
     rhdr.status = FCB_RECORD_ACTIVE;
