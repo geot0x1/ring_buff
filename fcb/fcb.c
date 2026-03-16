@@ -558,6 +558,8 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
     }
 
     fcb->next_sequence = max_seq + 1;
+    
+    //! TODO: that should be set after successful recovery
     fcb->magic = FCB_INIT_MAGIC;
     fcb->is_mounted = true;
 
