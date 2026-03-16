@@ -554,7 +554,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
 
     if (valid_count == 0 || newest_sector == -1)
     {
-         return fcb_init_format_initial(fcb);
+        return fcb_init_format_initial(fcb);
     }
 
     fcb->next_sequence = max_seq + 1;
