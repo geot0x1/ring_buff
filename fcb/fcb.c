@@ -89,6 +89,8 @@ static void fcb_init_empty_state(fcb_t *fcb);
 static int fcb_find_oldest_newest(fcb_t *fcb, int *oldest_out, int *newest_out, uint32_t *max_seq_out);
 static int fcb_init_format_initial(fcb_t *fcb);
 static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector);
+static int fcb_recover_pointers_single(fcb_t *fcb, int sector);
+static int fcb_recover_pointers_chain(fcb_t *fcb, int oldest_sector, int newest_sector);
 
 /* Utility functions */
 static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num);
@@ -440,7 +442,63 @@ static int fcb_init_format_initial(fcb_t *fcb)
 /**
  * @brief Walk chronologically from oldest_sector to newest_sector to recover pointers.
  */
-static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector)
+/**
+ * @brief Recover pointers when there is exactly ONE valid sector in the buffer.
+ */
+static int fcb_recover_pointers_single(fcb_t *fcb, int sector)
+{
+    fcb_sector_hdr_t sec_hdr;
+    if (read_sector_header(fcb, (uint32_t)sector, &sec_hdr) != FCB_OK || sec_hdr.magic != FCB_SECTOR_MAGIC)
+    {
+        return FCB_CORRUPTED; 
+    }
+
+    uint32_t offset = sec_hdr.data_start;
+    uint32_t last_valid_offset = offset;
+    bool read_ptr_found = false;
+
+    while (offset + FCB_RECORD_HDR_SIZE <= fcb->config.sector_size)
+    {
+        fcb_record_hdr_t rec_hdr;
+        int rc = read_record_header(fcb, (uint32_t)sector, offset, &rec_hdr);
+        if (rc != FCB_OK || rec_hdr.magic != FCB_RECORD_MAGIC)
+        {
+            break; 
+        }
+
+        uint32_t total_record_len = FCB_RECORD_HDR_SIZE + rec_hdr.length + 1; 
+
+        if (rec_hdr.status == FCB_RECORD_ACTIVE && !read_ptr_found)
+        {
+            fcb->read_sector = (uint32_t)sector;
+            fcb->read_offset = offset;
+            fcb->delete_sector = (uint32_t)sector;
+            fcb->delete_offset = offset;
+            read_ptr_found = true;
+        }
+
+        last_valid_offset = offset + total_record_len;
+        offset += total_record_len;
+    }
+
+    fcb->write_sector = (uint32_t)sector;
+    fcb->write_offset = last_valid_offset;
+
+    if (!read_ptr_found)
+    {
+        fcb->read_sector = fcb->write_sector;
+        fcb->read_offset = fcb->write_offset;
+        fcb->delete_sector = fcb->write_sector;
+        fcb->delete_offset = fcb->write_offset;
+    }
+
+    return FCB_OK;
+}
+
+/**
+ * @brief Recover pointers by walking a chain of multiple valid sectors chronologically.
+ */
+static int fcb_recover_pointers_chain(fcb_t *fcb, int oldest_sector, int newest_sector)
 {
     bool read_ptr_found = false;
     uint32_t overflow = 0; 
@@ -527,6 +585,18 @@ static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector
     }
 
     return FCB_OK;
+}
+
+static int fcb_recover_pointers(fcb_t *fcb, int oldest_sector, int newest_sector)
+{
+    if (oldest_sector == newest_sector)
+    {
+        return fcb_recover_pointers_single(fcb, oldest_sector);
+    }
+    else
+    {
+        return fcb_recover_pointers_chain(fcb, oldest_sector, newest_sector);
+    }
 }
 
 
