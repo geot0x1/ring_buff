@@ -176,11 +176,12 @@ typedef struct
      *   delete_ptr → read_ptr → write_ptr (circular order)
      * 
      * delete_ptr: Points to the first item to be deleted. When fcb_delete() 
-     *             is called, it deletes items starting from here until 
-     *             reaching read_ptr. Returns error if delete_ptr == read_ptr.
+     *             is called, it deletes ALL items from here up to write_ptr,
+     *             marking every record consumed. After completion,
+     *             delete_ptr == read_ptr == write_ptr (buffer empty).
      * 
-     * read_ptr:   Points to the oldest unconsumed (unread) record. fcb_read() 
-     *             retrieves from here. Advances via fcb_delete().
+     * read_ptr:   Points to the next unread record. fcb_read()
+     *             retrieves from here and advances this pointer.
      * 
      * write_ptr:  Points to where the next write will occur. fcb_write() 
      *             appends data here.
@@ -228,9 +229,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg);
 int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len);
 
 /**
- * @brief Peek the oldest unconsumed record (non-destructive).
- *
- * Multiple consecutive calls return the exact same data.
+ * @brief Read the next unread record and advance the read pointer.
  *
  * @param fcb      Initialised FCB instance.
  * @param buf      Destination buffer (must be >= 1024 bytes).
@@ -240,7 +239,10 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len);
 int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
 
 /**
- * @brief Mark the oldest unconsumed record as consumed and advance head.
+ * @brief Delete all records that have been read.
+ *
+ * Deletes records from `delete_ptr` up to (but not including) `read_ptr`.
+ * If `delete_ptr == read_ptr`, there is nothing pending deletion.
  *
  * @param fcb  Initialised FCB instance.
  * @return FCB_OK, FCB_EMPTY, or FCB_ERR_FLASH.

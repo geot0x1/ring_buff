@@ -1070,7 +1070,7 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
 }
 
 /* ================================================================== */
-/*  fcb_read — peek the oldest unconsumed record (non-destructive)     */
+/*  fcb_read — read next unread record and advance read_ptr            */
 /* ================================================================== */
 
 int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
@@ -1082,21 +1082,12 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 
     fcb_lock(fcb);
 
-    /* Check for empty buffer. */
+    /* Empty when there are no unread records left. */
     if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
         fcb->read_ptr_offset == fcb->write_ptr_offset)
     {
-        /* Verify truly empty: no valid record at read position. */
-        fcb_record_hdr_t rhdr;
-        uint32_t addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
-        int rc = read_record_header(fcb, addr, &rhdr);
-        if (rc != FCB_OK || !is_valid_record_header(&rhdr) ||
-            rhdr.consumed == FCB_RECORD_CONSUMED)
-        {
-            fcb_unlock(fcb);
-            return FCB_EMPTY;
-        }
-        /* If there IS a valid unconsumed record here, fall through. */
+        fcb_unlock(fcb);
+        return FCB_EMPTY;
     }
 
     /* -------------------------------------------------------------- */
@@ -1154,12 +1145,20 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 
     *len_out = rhdr.length;
 
+    /* Advance read_ptr so the next call returns the next unread record. */
+    uint8_t  next_read_sec;
+    uint32_t next_read_off;
+    advance_past_record(fcb, fcb->read_ptr_sector, fcb->read_ptr_offset,
+                        rhdr.length, &next_read_sec, &next_read_off);
+    fcb->read_ptr_sector = next_read_sec;
+    fcb->read_ptr_offset = next_read_off;
+
     fcb_unlock(fcb);
     return FCB_OK;
 }
 
 /* ================================================================== */
-/*  fcb_delete — mark head record as consumed and advance              */
+/*  fcb_delete — consume ALL records in the buffer                     */
 /* ================================================================== */
 
 int fcb_delete(fcb_t *fcb)
@@ -1171,139 +1170,58 @@ int fcb_delete(fcb_t *fcb)
 
     fcb_lock(fcb);
 
-    /* -------------------------------------------------------------- */
-    /*  Check if there's anything to delete                            */
-    /*                                                                 */
-    /*  We can delete if there's at least one record written.          */
-    /*  If write_ptr == read_ptr, the buffer is empty (no data).       */
-    /* -------------------------------------------------------------- */
-    
-    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
-        fcb->read_ptr_offset == fcb->write_ptr_offset)
+    /* Nothing to delete when the buffer is empty. */
+    if (fcb->delete_ptr_sector == fcb->write_ptr_sector &&
+        fcb->delete_ptr_offset == fcb->write_ptr_offset)
     {
-        /* Buffer is empty - nothing to delete. */
         fcb_unlock(fcb);
         return FCB_EMPTY;
     }
 
-    /* -------------------------------------------------------------- */
-    /*  Read the record header at delete_ptr position                  */
-    /* -------------------------------------------------------------- */
-    fcb_record_hdr_t rhdr;
-    uint32_t hdr_addr = sector_addr(fcb, fcb->delete_ptr_sector) + fcb->delete_ptr_offset;
-    int rc = read_record_header(fcb, hdr_addr, &rhdr);
-    if (rc != FCB_OK)
+    while (!(fcb->delete_ptr_sector == fcb->write_ptr_sector &&
+             fcb->delete_ptr_offset == fcb->write_ptr_offset))
     {
-        fcb_unlock(fcb);
-        return rc;
-    }
-
-    if (!is_valid_record_header(&rhdr))
-    {
-        /* A corrupted/invalid header at the head means there is no
-         * well-formed record to delete — treat as empty.              */
-        fcb_unlock(fcb);
-        return FCB_EMPTY;
-    }
-
-    /* -------------------------------------------------------------- */
-    /*  Program the consumed flag: 0xFF → 0x00 (single byte, NOR safe) */
-    /*                                                                 */
-    /*  This marks the record as deleted. Even if power fails          */
-    /*  mid-program, the byte either stays 0xFF (not deleted) or       */
-    /*  becomes 0x00 (deleted). Both states are valid.                 */
-    /* -------------------------------------------------------------- */
-    if (rhdr.consumed != FCB_RECORD_CONSUMED)
-    {
-        /* Offset of consumed field within the record header:
-         * magic(4) + length(2) + crc32(4) = offset 10.                */
-        uint32_t consumed_addr = hdr_addr + 10;
-        uint8_t  consumed_val  = FCB_RECORD_CONSUMED;
-        rc = flash_program_checked(fcb, consumed_addr,
-                                   &consumed_val, 1);
+        fcb_record_hdr_t rhdr;
+        uint32_t hdr_addr = sector_addr(fcb, fcb->delete_ptr_sector) + fcb->delete_ptr_offset;
+        int rc = read_record_header(fcb, hdr_addr, &rhdr);
         if (rc != FCB_OK)
         {
             fcb_unlock(fcb);
             return rc;
         }
-    }
 
-    /* -------------------------------------------------------------- */
-    /*  Advance delete_ptr past this deleted record                    */
-    /* -------------------------------------------------------------- */
-    uint8_t  old_delete_sec = fcb->delete_ptr_sector;
-    uint32_t old_delete_off = fcb->delete_ptr_offset;
-    
-    uint8_t  new_delete_sec;
-    uint32_t new_delete_off;
-    advance_past_record(fcb, fcb->delete_ptr_sector, fcb->delete_ptr_offset,
-                        rhdr.length, &new_delete_sec, &new_delete_off);
-
-    fcb->delete_ptr_sector = new_delete_sec;
-    fcb->delete_ptr_offset = new_delete_off;
-    
-    /* -------------------------------------------------------------- */
-    /*  Advance read_ptr past this record if it points to same record  */
-    /*  (i.e., the user didn't read this record before deleting)       */
-    /* -------------------------------------------------------------- */
-    if (fcb->read_ptr_sector == old_delete_sec &&
-        fcb->read_ptr_offset == old_delete_off)
-    {
-        /* The record hasn't been read, but it's been deleted.
-         * Advance read_ptr to skip it, and continue skipping any
-         * other already-deleted records that follow. */
-        while (1)
+        if (!is_valid_record_header(&rhdr))
         {
-            /* Stop if read_ptr has caught up to write_ptr (end of data). */
-            if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
-                fcb->read_ptr_offset == fcb->write_ptr_offset)
-            {
-                break;
-            }
+            /* No valid record at delete_ptr — treat as end of data. */
+            fcb_unlock(fcb);
+            return FCB_EMPTY;
+        }
 
-            /* Ensure we can read a record header at this position. */
-            if (fcb->read_ptr_offset + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
-            {
-                /* Not enough room for header - move to next sector. */
-                uint8_t ns = next_sector(fcb, fcb->read_ptr_sector);
-                fcb_sector_hdr_t shdr;
-                rc = read_sector_header(fcb, ns, &shdr);
-                if (rc != FCB_OK || shdr.magic != FCB_SECTOR_MAGIC ||
-                    shdr.status != FCB_SECTOR_STATUS_VALID)
-                {
-                    break;
-                }
-                fcb->read_ptr_sector = ns;
-                fcb->read_ptr_offset = FCB_SECTOR_HDR_SIZE;
-            }
-
-            hdr_addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
-            rc = read_record_header(fcb, hdr_addr, &rhdr);
+        if (rhdr.consumed != FCB_RECORD_CONSUMED)
+        {
+            /* consumed field offset = magic(4) + length(2) + crc32(4) = 10 */
+            uint32_t consumed_addr = hdr_addr + 10;
+            uint8_t  consumed_val  = FCB_RECORD_CONSUMED;
+            rc = flash_program_checked(fcb, consumed_addr, &consumed_val, 1);
             if (rc != FCB_OK)
             {
-                break;
+                fcb_unlock(fcb);
+                return rc;
             }
-
-            if (!is_valid_record_header(&rhdr))
-            {
-                break;
-            }
-
-            /* If this record is not consumed (unconsumed), stop - found next record to read. */
-            if (rhdr.consumed != FCB_RECORD_CONSUMED)
-            {
-                break;
-            }
-
-            /* This record is consumed - skip it. */
-            uint8_t  skip_sec;
-            uint32_t skip_off;
-            advance_past_record(fcb, fcb->read_ptr_sector, fcb->read_ptr_offset,
-                                rhdr.length, &skip_sec, &skip_off);
-            fcb->read_ptr_sector = skip_sec;
-            fcb->read_ptr_offset = skip_off;
         }
+
+        uint8_t  next_delete_sec;
+        uint32_t next_delete_off;
+        advance_past_record(fcb, fcb->delete_ptr_sector, fcb->delete_ptr_offset,
+                            rhdr.length, &next_delete_sec, &next_delete_off);
+
+        fcb->delete_ptr_sector = next_delete_sec;
+        fcb->delete_ptr_offset = next_delete_off;
     }
+
+    /* All entries deleted — read_ptr catches up to write_ptr. */
+    fcb->read_ptr_sector = fcb->write_ptr_sector;
+    fcb->read_ptr_offset = fcb->write_ptr_offset;
 
     fcb_unlock(fcb);
     return FCB_OK;
@@ -1433,33 +1351,8 @@ bool fcb_is_empty(const fcb_t *fcb)
 
     fcb_lock((fcb_t *)fcb);
 
-    /* Empty when read_ptr == write_ptr and no valid unconsumed record at read_ptr. */
-    bool result = false;
-    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
-        fcb->read_ptr_offset == fcb->write_ptr_offset)
-    {
-        fcb_record_hdr_t rhdr;
-        uint32_t addr = sector_addr(fcb, fcb->read_ptr_sector) + fcb->read_ptr_offset;
-        int rc = flash_read_checked(fcb, addr, (uint8_t *)&rhdr,
-                                    sizeof(fcb_record_hdr_t));
-        if (rc != FCB_OK)
-        {
-            result = true;
-        }
-        else if (!is_valid_record_header(&rhdr) ||
-                 rhdr.consumed == FCB_RECORD_CONSUMED)
-        {
-            result = true;
-        }
-        else
-        {
-            result = false;
-        }
-    }
-    else
-    {
-        result = false;
-    }
+    bool result = (fcb->read_ptr_sector == fcb->write_ptr_sector &&
+                   fcb->read_ptr_offset == fcb->write_ptr_offset);
 
     fcb_unlock((fcb_t *)fcb);
     return result;
