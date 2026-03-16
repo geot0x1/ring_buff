@@ -550,6 +550,78 @@ static void test_fcb_init_recover_with_corrupt_record(void)
 }
 
 /* ================================================================== */
+/*  Additional Write Tests                                            */
+/* ================================================================== */
+
+static void test_fcb_write_header_split(void)
+{
+    printf("Running test_fcb_write_header_split...\n");
+    flash_init();
+    
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    
+    // Manually set write_offset to leave 3 bytes free in sector 0
+    fcb.write_offset = cfg.sector_size - 3;
+    
+    uint8_t data[10] = {1,2,3,4,5,6,7,8,9,10};
+    rc = fcb_write(&fcb, data, 10);
+    assert(rc == FCB_OK);
+    
+    assert(fcb.write_sector == 1);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 10 + 1);
+    
+    uint8_t buf[16];
+    size_t len_out = 0;
+    fcb.read_sector = 1;
+    fcb.read_offset = FCB_SECTOR_HDR_SIZE;
+    rc = fcb_read(&fcb, buf, sizeof(buf), &len_out);
+    assert(rc == FCB_OK);
+    assert(len_out == 10);
+    assert(memcmp(buf, data, 10) == 0);
+    
+    printf("Passed test_fcb_write_header_split\n");
+}
+
+static void test_fcb_write_data_split(void)
+{
+    printf("Running test_fcb_write_data_split...\n");
+    flash_init();
+    
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    
+    // Manually set write_offset to leave 10 bytes free
+    fcb.write_offset = cfg.sector_size - 10;
+    
+    uint8_t data[7] = {1,2,3,4,5,6,7};
+    rc = fcb_write(&fcb, data, 7);
+    assert(rc == FCB_OK);
+    
+    assert(fcb.write_sector == 1);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE + 1 + 1);
+    
+    uint8_t buf[16];
+    size_t len_out = 0;
+    fcb.read_sector = 0;
+    fcb.read_offset = cfg.sector_size - 10;
+    rc = fcb_read(&fcb, buf, sizeof(buf), &len_out);
+    assert(rc == FCB_OK);
+    assert(len_out == 7);
+    assert(memcmp(buf, data, 7) == 0);
+    
+    printf("Passed test_fcb_write_data_split\n");
+}
+
+/* ================================================================== */
 /*  Main Runner                                                       */
 /* ================================================================== */
 
@@ -571,10 +643,15 @@ int main(void)
     test_fcb_init_recover_with_consumed_sector();
     test_fcb_init_recover_with_corrupt_record();
 
+    printf("\n--- Running Write Split Tests ---\n");
+    test_fcb_write_header_split();
+    test_fcb_write_data_split();
+
     printf("\n================================================\n");
     printf("All simulation tests completed successfully\n");
     printf("================================================\n");
 
     return 0;
 }
+
 
