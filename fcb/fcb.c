@@ -103,6 +103,13 @@ static void fcb_recovery_find_write_ptr(fcb_t *fcb, uint32_t newest_sector,
 /* Utility functions */
 static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num);
 
+/* Flash driver wrappers with NULL protection */
+static int fcb_flash_read(fcb_t *fcb, uint32_t addr, uint8_t *buf, size_t len);
+
+static int fcb_flash_program(fcb_t *fcb, uint32_t addr, const uint8_t *data, size_t len);
+
+static int fcb_flash_erase_sector(fcb_t *fcb, uint32_t addr);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -138,9 +145,9 @@ static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
                            (sector_num * fcb->config.sector_size);
 
     /* Program the header to flash */
-    int rc = fcb->config.flash_program(fcb->config.flash_ctx, sector_addr,
-                                       (const uint8_t *)&hdr,
-                                       sizeof(fcb_sector_hdr_t));
+    int rc = fcb_flash_program(fcb, sector_addr,
+                               (const uint8_t *)&hdr,
+                               sizeof(fcb_sector_hdr_t));
 
     if (rc != 0)
     {
@@ -183,9 +190,9 @@ static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
                            (sector_num * fcb->config.sector_size);
 
     /* Read the header from flash */
-    int rc = fcb->config.flash_read(fcb->config.flash_ctx, sector_addr,
-                                    (uint8_t *)hdr,
-                                    sizeof(fcb_sector_hdr_t));
+    int rc = fcb_flash_read(fcb, sector_addr,
+                            (uint8_t *)hdr,
+                            sizeof(fcb_sector_hdr_t));
 
     if (rc != 0)
     {
@@ -259,9 +266,9 @@ static int write_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t offset,
     uint32_t header_addr = sector_addr + fcb->config.sector_size - FCB_RECORD_HDR_SIZE;
 
     /* Program the header to flash */
-    int rc = fcb->config.flash_program(fcb->config.flash_ctx, header_addr,
-                                       (const uint8_t *)&hdr,
-                                       sizeof(fcb_record_hdr_t));
+    int rc = fcb_flash_program(fcb, header_addr,
+                               (const uint8_t *)&hdr,
+                               sizeof(fcb_record_hdr_t));
 
     if (rc != 0)
     {
@@ -309,9 +316,9 @@ static int read_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t header_o
     uint32_t header_addr = sector_addr + header_offset;
 
     /* Read the header from flash */
-    int rc = fcb->config.flash_read(fcb->config.flash_ctx, header_addr,
-                                    (uint8_t *)hdr,
-                                    sizeof(fcb_record_hdr_t));
+    int rc = fcb_flash_read(fcb, header_addr,
+                            (uint8_t *)hdr,
+                            sizeof(fcb_record_hdr_t));
 
     if (rc != 0)
     {
@@ -636,8 +643,7 @@ static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num)
         size_t bytes_to_read = (total_bytes - offset < FCB_PAGE_SIZE) ? 
                                (total_bytes - offset) : FCB_PAGE_SIZE;
 
-        int rc = fcb->config.flash_read(fcb->config.flash_ctx, sector_addr + offset,
-                                        page_buf, bytes_to_read);
+        int rc = fcb_flash_read(fcb, sector_addr + offset, page_buf, bytes_to_read);
         if (rc != 0)
         {
             return false;  /* Read error */
@@ -654,6 +660,74 @@ static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num)
     }
 
     return true;  /* Entire sector is erased */
+}
+
+/* ================================================================== */
+/*  Flash Driver Wrappers with NULL Protection                         */
+/* ================================================================== */
+
+/**
+ * Read from flash with NULL protection.
+ *
+ * Validates that the flash_read callback is not NULL before calling it.
+ * Returns FCB_ERR_FLASH if callback is NULL.
+ *
+ * @param fcb   FCB instance.
+ * @param addr  Flash address to read from.
+ * @param buf   Destination buffer.
+ * @param len   Number of bytes to read.
+ * @return FCB_OK on success, FCB_ERR_FLASH if callback is NULL or read fails.
+ */
+static int fcb_flash_read(fcb_t *fcb, uint32_t addr, uint8_t *buf, size_t len)
+{
+    if (!fcb || !fcb->config.flash_read)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    return fcb->config.flash_read(fcb->config.flash_ctx, addr, buf, len);
+}
+
+/**
+ * Program to flash with NULL protection.
+ *
+ * Validates that the flash_program callback is not NULL before calling it.
+ * Returns FCB_ERR_FLASH if callback is NULL.
+ *
+ * @param fcb   FCB instance.
+ * @param addr  Flash address to program to.
+ * @param data  Data to program.
+ * @param len   Number of bytes to program.
+ * @return FCB_OK on success, FCB_ERR_FLASH if callback is NULL or program fails.
+ */
+static int fcb_flash_program(fcb_t *fcb, uint32_t addr, const uint8_t *data, size_t len)
+{
+    if (!fcb || !fcb->config.flash_program)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    return fcb->config.flash_program(fcb->config.flash_ctx, addr, data, len);
+}
+
+/**
+ * Erase a sector with NULL protection.
+ *
+ * Validates that the flash_erase_sector callback is not NULL before calling it.
+ * Returns FCB_ERR_FLASH if callback is NULL.
+ *
+ * @param fcb   FCB instance.
+ * @param addr  Address within the sector to erase.
+ * @return FCB_OK on success, FCB_ERR_FLASH if callback is NULL or erase fails.
+ */
+static int fcb_flash_erase_sector(fcb_t *fcb, uint32_t addr)
+{
+    if (!fcb || !fcb->config.flash_erase_sector)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    return fcb->config.flash_erase_sector(fcb->config.flash_ctx, addr);
 }
 
 /* ================================================================== */
