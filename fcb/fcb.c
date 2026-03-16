@@ -39,6 +39,14 @@
 #define FCB_INIT_MAGIC 0xFCB0FCB0U
 
 /* ================================================================== */
+/*  Debug logging macro (can be disabled at compile time)              */
+/* ================================================================== */
+
+#ifndef FCB_LOG
+#define FCB_LOG(...) printf(__VA_ARGS__)
+#endif
+
+/* ================================================================== */
 /*  Lock / unlock helpers (NULL-safe)                                  */
 /* ================================================================== */
 
@@ -813,7 +821,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
                 fcb->read_ptr_sector = cur_sector;
                 fcb->read_ptr_offset = cur_offset;
                 head_found = true;
-                printf("[FCB_INIT] Found first unconsumed record at sector=%u, offset=%u, len=%u\n",
+                FCB_LOG("[FCB_INIT] Found first unconsumed record at sector=%u, offset=%u, len=%u\n",
                        cur_sector, cur_offset, rhdr.length);
             }
 
@@ -823,7 +831,7 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
             advance_past_record(fcb, cur_sector, cur_offset, rhdr.length,
                                 &adv_sec, &adv_off);
 
-            printf("[FCB_INIT] Found valid record at sector=%u, offset=%u, len=%u, consumed=0x%02X, spans to sector=%u, offset=%u\n",
+            FCB_LOG("[FCB_INIT] Found valid record at sector=%u, offset=%u, len=%u, consumed=0x%02X, spans to sector=%u, offset=%u\n",
                    cur_sector, cur_offset, rhdr.length, rhdr.consumed, adv_sec, adv_off);
 
             last_valid_sector = adv_sec;
@@ -864,16 +872,16 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
     fcb->is_mounted = true;
     
     /* Diagnostic output for recovery debugging */
-    printf("[FCB_INIT] Recovery complete. Pointer values:\n");
-    printf("  delete_ptr: sector=%u, offset=%u\n", 
+    FCB_LOG("[FCB_INIT] Recovery complete. Pointer values:\n");
+    FCB_LOG("  delete_ptr: sector=%u, offset=%u\n", 
            fcb->delete_ptr_sector, fcb->delete_ptr_offset);
-    printf("  read_ptr:   sector=%u, offset=%u\n", 
+    FCB_LOG("  read_ptr:   sector=%u, offset=%u\n", 
            fcb->read_ptr_sector, fcb->read_ptr_offset);
-    printf("  write_ptr:  sector=%u, offset=%u\n", 
+    FCB_LOG("  write_ptr:  sector=%u, offset=%u\n", 
            fcb->write_ptr_sector, fcb->write_ptr_offset);
-    printf("  next_sequence=%u, head_found=%d\n", 
+    FCB_LOG("  next_sequence=%u, head_found=%d\n", 
            fcb->next_sequence, head_found);
-    printf("  Oldest sector=%d, Newest sector=%d, Valid sectors=%u\n",
+    FCB_LOG("  Oldest sector=%d, Newest sector=%d, Valid sectors=%u\n",
            oldest_sector, newest_sector, valid_count);
     
     return FCB_OK;
@@ -1124,9 +1132,9 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 
     if (!is_valid_record_header(&rhdr))
     {
-        printf("[FCB_READ] Invalid record header at sector=%u, offset=%u\n",
+        FCB_LOG("[FCB_READ] Invalid record header at sector=%u, offset=%u\n",
                fcb->read_ptr_sector, fcb->read_ptr_offset);
-        printf("  magic=0x%08X (expected 0x%08X), length=%u, consumed=0x%02X\n",
+        FCB_LOG("  magic=0x%08X (expected 0x%08X), length=%u, consumed=0x%02X\n",
                rhdr.magic, FCB_RECORD_MAGIC, rhdr.length, rhdr.consumed);
         fcb_unlock(fcb);
         return FCB_CORRUPTED;
@@ -1163,9 +1171,9 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
     uint32_t crc = crc32_gen(buf, rhdr.length, 0xFFFFFFFF);
     if (crc != rhdr.crc32)
     {
-        printf("[FCB_READ] CRC mismatch at sector=%u, offset=%u\n",
+        FCB_LOG("[FCB_READ] CRC mismatch at sector=%u, offset=%u\n",
                fcb->read_ptr_sector, fcb->read_ptr_offset);
-        printf("  length=%u, expected_crc=0x%08X, computed_crc=0x%08X\n",
+        FCB_LOG("  length=%u, expected_crc=0x%08X, computed_crc=0x%08X\n",
                rhdr.length, rhdr.crc32, crc);
         fcb_unlock(fcb);
         return FCB_CORRUPTED;
