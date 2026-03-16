@@ -132,7 +132,7 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 *   Advances `delete_ptr` forward until it meets `read_ptr`, so those records are no longer treated as unconsumed.
 *   If `read_ptr` is already at `delete_ptr`, there is nothing to delete (returns `FCB_EMPTY`).
 
-### 3.5 Sector Discard (`fcb_discard_oldest_sector`)
+### 3.5 Sector Trim (`fcb_trim`)
 *   Erases the oldest sector, but only if all records within it are marked as consumed.
 *   Before erasure, the sector status is optionally transitioned to `0x55` (consumed) to indicate that all its records are consumed and it is ready for erasure.
 *   The `read_ptr` must have moved into a subsequent sector before the oldest can be erased.
@@ -145,7 +145,7 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 | `fcb_write` | Appends a new record to the buffer. |
 | `fcb_read` | Peeks at the oldest unconsumed record. |
 | `fcb_delete` | Marks the oldest unconsumed record as consumed. |
-| `fcb_discard_oldest_sector` | Erases the oldest sector if fully consumed. |
+| `fcb_trim` | Erases the oldest sector if fully consumed. |
 | `fcb_is_full` | Checks if the buffer has room for a max-size record. |
 | `fcb_is_empty` | Checks if there are any unconsumed records. |
 

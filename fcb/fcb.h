@@ -237,7 +237,7 @@ int fcb_delete(fcb_t *fcb);
  * @param fcb  Initialised FCB instance.
  * @return FCB_OK, FCB_NOT_CONSUMED, FCB_EMPTY, or FCB_ERR_FLASH.
  */
-int fcb_discard_oldest_sector(fcb_t *fcb);
+int fcb_trim(fcb_t *fcb);
 
 /**
  * @brief Check whether the buffer has no room for another max-size record.

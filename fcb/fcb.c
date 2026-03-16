@@ -152,7 +152,7 @@ int fcb_delete(fcb_t *fcb)
     return FCB_EMPTY;
 }
 
-int fcb_discard_oldest_sector(fcb_t *fcb)
+int fcb_trim(fcb_t *fcb)
 {
     if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted)
     {
