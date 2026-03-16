@@ -66,6 +66,13 @@ static inline void fcb_unlock(fcb_t *fcb)
 }
 
 /* ================================================================== */
+/*  Static function declarations                                      */
+/* ================================================================== */
+
+static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
+                               uint32_t sequence, uint8_t status);
+
+/* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
 
