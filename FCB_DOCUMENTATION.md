@@ -102,8 +102,10 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 **Find read_ptr (tail):**
 1.  **Scan Sector Headers:** Finds all valid FCB sectors and identifies the oldest/newest based on sequence numbers.
 2.  **Walk from Oldest Sector:** Starting from the oldest sector, the recovery process scans the FCB records stored at the end of each sector (growing downward from sector end). For each sector, it walks through all record headers from the top (lowest address of the header region) to find each record sequentially, validating each header.
-3.  **Find First Unread:** During the record walk, the process identifies the first record with the `consumed` flag set to `0xFF` (unread). This becomes the initial `read_ptr`. Records before this are marked as already-read (consumed flag = `0x00`).
-4.  **Validate Integrity:** Checks record magic and CRC. Invalid records are treated as the end of valid data.
+3.  **Skip Consumed Records:** During the record walk, consumed records (consumed flag = `0x00`) are skipped. Only unread records (consumed flag = `0xFF`) are considered as candidates for `read_ptr`.
+4.  **Find First Unread:** The process identifies the first record with valid magic (`0xFCBA`), valid CRC-8, and `consumed` flag set to `0xFF` (unread). This becomes the initial `read_ptr`.
+5.  **Handle Fragmented Records:** If a record is found to be fragmented or invalid, the algorithm continues reading the next record header to check if there is a valid record following it. Invalid records are skipped in the search for the first unread record.
+6.  **All-Consumed Sector:** If the oldest sector contains only consumed records (no unread records found), mark the sector status as `0x00` (consumed) and move to the next sector to continue searching for the first unread record.
 
 **Find write_ptr (head):**
 1.  **Scan from Newest Sector:** Starting from the newest sector (highest sequence number), the recovery process walks the FCB records at the end of the sector.
