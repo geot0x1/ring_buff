@@ -73,6 +73,9 @@ static inline void fcb_unlock(fcb_t *fcb)
 static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
                                uint32_t sequence, uint8_t status);
 
+static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
+                              fcb_sector_hdr_t *hdr);
+
 static int write_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t offset,
                                uint16_t length);
 
@@ -114,6 +117,46 @@ static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
     int rc = fcb->config.flash_program(fcb->config.flash_ctx, sector_addr,
                                        (const uint8_t *)&hdr,
                                        sizeof(fcb_sector_hdr_t));
+
+    if (rc != 0)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    return FCB_OK;
+}
+
+/* ================================================================== */
+/*  Sector header reader                                               */
+/* ================================================================== */
+
+/**
+ * Read a sector header from flash at the start of the given sector.
+ *
+ * @param fcb        Initialised FCB instance.
+ * @param sector_num Sector number (0..num_sectors-1).
+ * @param hdr        Pointer to fcb_sector_hdr_t where header will be stored.
+ *
+ * @return FCB_OK on success, FCB_INVALID_ARG if sector_num is out of range or hdr is NULL,
+ *         or FCB_ERR_FLASH if the flash read operation fails.
+ */
+static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
+                              fcb_sector_hdr_t *hdr)
+{
+    /* Validate inputs */
+    if (sector_num >= fcb->config.num_sectors || !hdr)
+    {
+        return FCB_INVALID_ARG;
+    }
+
+    /* Calculate the physical flash address of this sector's start */
+    uint32_t sector_addr = fcb->config.start_addr + 
+                           (sector_num * fcb->config.sector_size);
+
+    /* Read the header from flash */
+    int rc = fcb->config.flash_read(fcb->config.flash_ctx, sector_addr,
+                                    (uint8_t *)hdr,
+                                    sizeof(fcb_sector_hdr_t));
 
     if (rc != 0)
     {
