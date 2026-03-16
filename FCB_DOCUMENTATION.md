@@ -6,16 +6,17 @@ The Flash Circular Buffer (FCB) is a robust, power-fail-safe, circular FIFO impl
 
 ### 1.1 Power-Fail Safety
 The FCB is designed to ensure that the buffer state remains recoverable at any point, even if power is lost during a write or erase operation.
-*   **Ordered Writes:** Record data is written first, followed by the record header at the end of the sector. Sector headers are written before any records in that sector. This allows the recovery process to identify partially written or corrupted data.
-*   **State Transitions:** Sector status transitions from erased (0xFF) → valid (0xAA) → consumed (0x00) only clear bits, exploiting NOR flash's write-once property.
-*   **Atomic Operations:** The "consumed" flag in record headers transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
-*   **CRC-8 Validation:** Every record header includes a CRC-8 of the header itself (excluding the consumed flag). This ensures that header corruption is detected.
+*   **Sequential Writes:** Record data is written sequentially (Header → Data → CRC8). Sector headers are written at the beginning of the sector to maintain structure.
+*   **State Transitions:** Sector status transitions from erased/valid (`0xFF`) to consumed (`0x00`) only clearing bits, exploiting NOR flash's write-once property.
+*   **Atomic Operations:** The status flag in record headers transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
+*   **CRC-8 Validation:** A CRC-8 checksum is appended after the record data and validates the data payload integrity.
 
 ### 1.2 NOR Flash Optimization
 *   **Sector-Based Erasure:** The buffer is divided into multiple sectors. Erasure occurs at the sector level only when all records within that sector have been consumed.
 *   **Minimal RAM Usage:** The state is maintained in a small `fcb_t` structure. No large RAM buffers or look-up tables are required.
 
 ## 2. Architecture
+
 
 ### 2.1 On-Flash Data Structures
 
@@ -25,120 +26,92 @@ Located at the beginning of every sector.
 | :--- | :--- | :--- | :--- |
 | 0 | 4 | `magic` | `0x0FCBF1F0` ensures the sector is a valid FCB sector. |
 | 4 | 4 | `sequence` | Monotonically increasing number used to determine logical order. |
-| 8 | 1 | `status` | `0xFF` (erased), `0xAA` (valid/active), or `0x00` (consumed). |
+| 8 | 1 | `status` | `0xFF` (erased/valid) or `0x00` (consumed). |
 | 9 | 7 | `reserved` | Future use. |
 
-#### Record Header (8 bytes)
-Located at the END of every sector (highest address), growing downward. Each record header stores metadata about a corresponding record's data.
+#### Record Header (4 bytes)
+Located sequentially within the sector. Each record header is followed by the record data and a CRC-8 byte.
 
 | Offset | Size | Field | Description |
 | :--- | :--- | :--- | :--- |
-| 0 | 2 | `magic` | `0xFCBA` identifies a valid record header. |
-| 2 | 2 | `length` | Size of the data payload (1–1024 bytes). |
-| 4 | 2 | `offset` | Byte offset from the sector start where the record data begins. |
-| 6 | 1 | `consumed` | `0xFF` (active) or `0x00` (consumed). |
-| 7 | 1 | `crc8` | CRC-8 checksum of the header (excluding the consumed flag). |
+| 0 | 1 | `magic` | Identifies a valid record header. |
+| 1 | 2 | `length` | Size of the data payload (1–1024 bytes). |
+| 3 | 1 | `status` | `0xFF` (good/unread) or `0x00` (consumed). |
+
+**Record Entry format:**
+`<magic><len1><len2><status><data><data_crc8>`
+*   `data_crc8` (1 byte) is appended immediately after the data payload and is calculated **ONLY** over the data payload.
 
 ### 2.2 Flash Memory Layout
-The FCB treats the assigned flash region as a contiguous array of sectors, which are mathematically mapped to a circular buffer. Within each sector, record data grows upward from the sector start, while record headers grow downward from the sector end.
+The FCB treats the assigned flash region as a contiguous array of sectors. Within each sector, records are written sequentially one after another, growing upwards from the Sector Header.
 
 ```text
 Flash Start Address
 |
 v
 +-----------------------+ <--- Sector 0 Start
-| Data Payload 1        |
+| Sector Header (16B)   |   (Status = 0xFF = Valid)
 +-----------------------+
-| Data Payload 2        |
+| Record 1 Header (4B) |
 +-----------------------+
-| ...                   |
+| Record 1 Data (Len)   |
 +-----------------------+
-| Record Header 2 (8B)  |  <--- Headers at end, growing down
-| Record Header 1 (8B)  |
-| Sector Header (16B)   |
-+-----------------------+ <--- Sector 0 End (highest address)
-|
-v
-+-----------------------+ <--- Sector 1 Start
-| Data Payload N (Part 1) |
+| Record 1 CRC8 (1B)    |
++-----------------------+
+| Record 2 Header (4B) |
++-----------------------+
+| Record 2 Data (Len)   |
 +-----------------------+
 | ...                   |
 +-----------------------+
-| Record Header 1 (8B)  |
-| Sector Header (16B)   |
-+-----------------------+ <--- Sector 1 End (highest address)
-|
-v
-+-----------------------+ <--- Sector 2 Start
-| Data Payload N (Part 2) |  (continuation from Sector 1)
-+-----------------------+
-| Data Payload N+1      |
-+-----------------------+
-| Record Header 2 (8B)  |
-| Record Header 1 (8B)  |
-| Sector Header (16B)   |
-+-----------------------+ <--- Sector 2 End (highest address)
 ```
 
-*   **Layout Inversion:** Sector headers and record headers are now located at the END (highest address) of each sector. Data payloads grow upward from the sector start. Record headers contain an `offset` field that points to where each record's data begins within the sector.
-*   **Header-Aware Offset:** The `offset` field in each record header is the absolute byte position from the sector start where the record data is located.
-*   **Record Walk Order:** When walking/scanning FCB records within a sector, start from the top (lowest address) of the record header region and advance toward the sector end. This ensures records are encountered in data write order.
-*   **No Cross-Sector Spanning:** Record payloads and their corresponding record headers must reside entirely within a single sector. If there is not enough room in the current sector for the entire record (data + header), the write operation begins in the next sector.
-*   **New Sector Opening:** If a record cannot fit in the current sector (not enough space for data + header), a new sector is created with a fresh sector header. The new record is then written to this new sector.
+*   **Sequential Placement:** Records grow from the top of the sector space (address increasing order).
+*   **Data Splitting:** Record data **can** split and span across sector boundaries. If the data exceeds the space in the current sector, it continues in the next sector (starting immediately after the Sector Header).
+*   **Header Integrity:** Record headers **cannot** split between sectors. A header must fit entirely within a single sector.
 
 ### 2.3 Memory Representation (RAM)
 The `fcb_t` structure maintains the runtime state:
-*   **Four-Pointer Architecture:**
-    *   `delete_ptr`: (Sector index, Offset). Points to the start of the oldest record known to the system.
-    *   `read_ptr`: (Sector index, Offset). Points to the start of the next record to be returned by `fcb_read`.
-    *   `write_ptr`: (Sector index, Offset). Points to the exact flash address where the next record header will be written.
-    *   `write_data_ptr`: (Sector index, Offset). Points to the first erased byte (`0xFF`) where the next record data block can be written.
-*   **Configuration:** Stores flash driver callbacks (`read`, `program`, `erase_sector`) and geometry (size, address).
+*   **Pointer Architecture:**
+    *   `delete_ptr`: Points to the start of the oldest record known to the system.
+    *   `read_ptr`: Points to the start of the next record to be returned by `fcb_read`.
+    *   `write_ptr`: Points to the exact flash address where the next record header will be written.
+*   **Configuration:** Stores flash driver callbacks and geometry.
+
+---
 
 ## 3. Core Operations
 
 ### 3.1 Mounting and Recovery (`fcb_init`)
-Upon initialization, the FCB performs a full recovery scan with two separate walks:
+Upon initialization, the FCB performs a full recovery scan:
 
-**Find read_ptr (tail):**
 1.  **Scan Sector Headers:** Finds all valid FCB sectors and identifies the oldest/newest based on sequence numbers.
-2.  **Walk from Oldest Sector:** Starting from the oldest sector, the recovery process scans the FCB records stored at the end of each sector (growing downward from sector end). For each sector, it walks through all record headers from the top (lowest address of the header region) to find each record sequentially, validating each header.
-3.  **Skip Consumed Records:** During the record walk, consumed records (consumed flag = `0x00`) are skipped. Only unread records (consumed flag = `0xFF`) are considered as candidates for `read_ptr`.
-4.  **Find First Unread:** The process identifies the first record with valid magic (`0xFCBA`), valid CRC-8, and `consumed` flag set to `0xFF` (unread). This becomes the initial `read_ptr`.
-5.  **Handle Fragmented Records:** If a record is found to be fragmented or invalid, the algorithm continues reading the next record header to check if there is a valid record following it. Invalid records are skipped in the search for the first unread record.
-6.  **All-Consumed Sector:** If the oldest sector contains only consumed records (no unread records found), mark the sector status as `0x00` (consumed) and move to the next sector to continue searching for the first unread record.
-
-**Find write_ptr (head):**
-1.  **Scan from Newest Sector:** Starting from the newest sector (highest sequence number), the recovery process walks the FCB records at the end of the sector.
-2.  **Find Latest Valid Record:** Scans through record headers from the bottom (highest address in the header region) moving toward the top (lowest address), to locate the most recently written valid record header (valid magic `0xFCBA`, valid CRC-8).
-3.  **Position at Next Byte:** Positions `write_ptr` at the next available byte after the latest valid record, which is the erased space where the next record will be written.
+2.  **Sequential Walk:** Starting from the oldest sector, the recovery process scans records sequentially from the beginning of the sector (after the Sector Header).
+3.  **Validate Records:** For each record, it reads the 4-byte header. If valid, it skips the `length` bytes of data to find and verify the CRC-8 byte.
+4.  **Find read_ptr:** Finds the first record with a `status` of `0xFF` (unread).
+5.  **Find write_ptr:** Positions the write pointer at the first available byte after the last valid record in the newest sector.
 
 ### 3.2 Appending Records (`fcb_write`)
-*   Writes entries sequentially in circular order, storing data from the current `write_ptr` position.
-*   Record headers are appended at the end of the sector (growing downward from the sector end).
-*   **First-Erased Pointer:** Before writing, the FCB computes the first erased byte (`0xFF`) where the new record data can be written. This is calculated using the last record's `offset` and `length` (if any), then advancing to the first erased byte in flash.
-1.  **Space Check:** Ensures there is enough room for the record data and header within the current sector.
-2.  **Sector Management:** If the record cannot fit in the current sector, it prepares the next one by writing a new sector header with an incremented sequence, then writes the record to the new sector.
-3.  **Ordered Program:**
-    *   Writes the record data first at `write_ptr`.
-    *   Writes the record header at the sector end (with an offset field pointing to the data start).
-    *   Updates the `write_ptr` to account for the space used.
+*   Writes records sequentially into the current `write_ptr` sector.
+*   **Write Flow:**
+    1.  Writes the 4-byte Record Header.
+    2.  Writes the record data (managing cross-sector spans if needed).
+    3.  Writes the CRC-8 byte immediately following the data.
+*   **Advance Pointer:** Updates `write_ptr` to the next available address byte.
 
 ### 3.3 Reading Records (`fcb_read`)
-*   Reads entries sequentially in circular order starting at `read_ptr`.
-*   Continues reading records sequentially through the circular buffer until it reaches `write_ptr` (the end of written data).
-*   Each record must have: valid magic (`0xFCBA`), valid CRC-8, and `consumed` flag = `0xFF` (unread).
-*   Validates the record's CRC and magic before returning the data.
+*   Reads the record starting at `read_ptr`.
+*   Reconstructs the data (recovering from sector splits if applicable).
+*   Validates integrity using the appended CRC-8 byte.
 
 ### 3.4 Consuming and Deleting (`fcb_delete`)
-*   Marks all records that have been read (between `delete_ptr` and `read_ptr`) as consumed by writing `0x00` to their `consumed` flag in the record header at the end of the sector.
-*   Advances `delete_ptr` forward until it meets `read_ptr`, so those records are no longer treated as unconsumed.
-*   If `read_ptr` is already at `delete_ptr`, there is nothing to delete (returns `FCB_EMPTY`).
+*   Marks records as consumed by writing `0x00` into the `status` flag in the Record Header.
+*   Advances `delete_ptr` appropriately.
 
 ### 3.5 Sector Trim (`fcb_trim`)
-*   Erases the oldest sector, but only if all records within it are marked as consumed.
-*   **Mark as Consumed:** When all records in the sector are consumed, the sector status flag is written to `0x00` to mark the entire sector as consumed before erasure.
-*   **Pointer Advancement:** If `read_ptr` or `delete_ptr` are pointing into the sector being erased, they are automatically advanced to point at the first valid FCB record in the next sector. This ensures these pointers remain valid after the sector is erased.
+*   Erases sectors only when all records within them are marked as consumed.
+*   Marks the Sector Header status as `0x00` before erasure to aid recovery scanning.
+
 
 ## 4. API Reference
 
@@ -156,26 +129,22 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 
 ### Sector Status Lifecycle
 The sector status field transitions through states following NOR flash's one-way bit clearing property:
-```
-0xFF (Erased) 
-  ↓ [write sector header]
-0xAA (Valid/Active) 
+```text
+0xFF (Erased/Valid) 
   ↓ [mark all records consumed]
 0x00 (Consumed) 
   ↓ [erase sector]
-0xFF (Erased)
+0xFF (Erased/Valid)
 ```
 
-Each transition represents clearing additional bits (1→0 transitions only on NOR flash). The consumed status (`0x00`) is marked before erasure as an optimization flag and recovery aid, allowing the system to quickly identify sectors that contain only fully-consumed data.
+The consumed status (`0x00`) is marked before erasure as an optimization flag and recovery aid, allowing the system to quickly identify sectors that contain only fully-consumed data.
 
 > [!IMPORTANT]
-> **Header Offset Field:** The `offset` field in each record header specifies the byte position from the sector start where the record data is located. This allows for flexible data layout and efficient record header validation.
+> **Record Spanning:** Record data can cross sector boundaries if it extends beyond the current sector.
 
 > [!IMPORTANT]
-> **Record Spanning:** Record data can cross sector boundaries if it extends beyond the current sector. Headers and new sectors are created as needed.
-
-> [!IMPORTANT]
-> **New Sector Strategy:** If a record cannot fit in the current sector (including both its data and header), the FCB opens a new sector by writing a fresh sector header and writes the record to the new sector.
+> **Header Fit:** Record headers **cannot** split between sectors. If there is not enough space for the 4-byte header at the end of a sector, it must be written to the next sector.
 
 > [!IMPORTANT]
 > **Thread Safety:** The FCB provides lock/unlock callbacks in its configuration. These should be populated if the FCB will be accessed from multiple threads or interrupts.
+

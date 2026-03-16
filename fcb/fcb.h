@@ -23,8 +23,8 @@ extern "C" {
 /** Magic value written into every valid sector header. */
 #define FCB_SECTOR_MAGIC    0x0FCBF1F0U
 
-/** Magic value written into every valid record header. */
-#define FCB_RECORD_MAGIC    0xFCBAU
+/** Magic value written into every valid record header (1 byte). */
+#define FCB_RECORD_MAGIC    0xBAU
 
 /** Maximum number of sectors the FCB can manage. */
 #define FCB_MAX_SECTORS     64U
@@ -36,11 +36,10 @@ extern "C" {
 #define FCB_SECTOR_HDR_SIZE 16U
 
 /** Size of the on-flash record header (bytes). */
-#define FCB_RECORD_HDR_SIZE 8U
+#define FCB_RECORD_HDR_SIZE 4U
 
 /** Sector status values. */
-#define FCB_SECTOR_STATUS_ERASED   0xFFU
-#define FCB_SECTOR_STATUS_VALID    0xAAU
+#define FCB_SECTOR_STATUS_VALID    0xFFU
 #define FCB_SECTOR_STATUS_CONSUMED 0x00U
 
 /** Record consumed-flag values. */
@@ -71,23 +70,19 @@ typedef struct
 #pragma pack(pop)
 
 /**
- * Record header — placed at the END of every sector (highest address).
+ * Record header — placed sequentially within the sector.
  *
  *   Offset  Size  Field
- *   0       2     magic       (0xFCBA, identifies a valid record header)
- *   2       2     length      (1–1024)
- *   4       2     offset      (offset of data start within this sector)
- *   6       1     consumed    (0xFF = active, 0x00 = consumed)
- *   7       1     crc8        (CRC-8 of the header, excluding consumed flag)
+ *   0       1     magic       (0xBA, identifies a valid record header)
+ *   1       2     length      (1–1024)
+ *   3       1     status      (0xFF = active, 0x00 = consumed)
  */
 #pragma pack(push, 1)
 typedef struct
 {
-    uint16_t magic;
+    uint8_t  magic;
     uint16_t length;
-    uint16_t offset;
-    uint8_t  consumed;
-    uint8_t  crc8;
+    uint8_t  status;
 } fcb_record_hdr_t;
 #pragma pack(pop)
 
@@ -158,12 +153,8 @@ typedef struct
      * 
      * read_ptr:   Points to the next unread record. fcb_read()
      *             retrieves from here and advances this pointer on each call.
-     * 
-* write_ptr:  Points to where the next record header will be written. fcb_write()
-    *             appends headers here.
-    *
-    * write_data_ptr: Points to the first erased byte (`0xFF`) where the next
-    *                 record payload can be written.
+      * write_ptr:  Points to the next sequential address where the next record
+     *             (Header + Data + CRC8) will be written.
      */
     uint32_t delete_ptr_sector;   /**< Sector index of the delete pointer (0..num_sectors-1).        */
     uint32_t delete_ptr_offset;   /**< Byte offset within delete_ptr_sector (after sector header).   */
@@ -171,11 +162,8 @@ typedef struct
     uint32_t read_ptr_sector;     /**< Sector index of the read pointer (0..num_sectors-1).          */
     uint32_t read_ptr_offset;     /**< Byte offset within read_ptr_sector (after sector header).     */
 
-    uint32_t write_ptr_sector;    /**< Sector index where the next record header will be written.     */
-    uint32_t write_ptr_offset;    /**< Byte offset within write_ptr_sector (next free byte for header). */
-
-    uint32_t write_data_ptr_sector; /**< Sector index where the next record data will be written.     */
-    uint32_t write_data_ptr_offset; /**< Byte offset within write_data_ptr_sector (first erased byte). */
+    uint32_t write_ptr_sector;    /**< Sector index where the next record will be written.           */
+    uint32_t write_ptr_offset;    /**< Byte offset within write_ptr_sector (next free byte).         */
 
     uint32_t next_sequence;       /**< Next monotonic sequence number to assign.                      */
 
