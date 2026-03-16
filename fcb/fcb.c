@@ -79,6 +79,9 @@ static int read_sector_header(fcb_t *fcb, uint32_t sector_num,
 static int write_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t offset,
                                uint16_t length);
 
+static int read_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t header_offset,
+                              fcb_record_hdr_t *hdr);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -242,6 +245,81 @@ static int write_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t offset,
     if (rc != 0)
     {
         return FCB_ERR_FLASH;
+    }
+
+    return FCB_OK;
+}
+
+/* ================================================================== */
+/*  Record header reader                                               */
+/* ================================================================== */
+
+/**
+ * Read a record header from flash at a specific location within a sector.
+ *
+ * Validates that the read data matches the expected record header format:
+ *   - Magic field must equal FCB_RECORD_MAGIC (0xFCBA)
+ *   - Length must be 1–1024 bytes
+ *   - Consumed flag must be 0xFF (active) or 0x00 (consumed)
+ *   - CRC-8 must be valid over the first 6 bytes (magic, length, offset)
+ *
+ * @param fcb           Initialised FCB instance.
+ * @param sector_num    Sector number (0..num_sectors-1).
+ * @param header_offset Byte offset within the sector where the header is located.
+ * @param hdr           Pointer to fcb_record_hdr_t where header will be stored.
+ *
+ * @return FCB_OK on success, FCB_INVALID_ARG if inputs are invalid,
+ *         FCB_CORRUPTED if the read data is invalid (bad magic, bad CRC, 
+ *         invalid consumed flag, or invalid length), or FCB_ERR_FLASH if 
+ *         the flash read operation fails.
+ */
+static int read_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t header_offset,
+                              fcb_record_hdr_t *hdr)
+{
+    /* Validate inputs */
+    if (sector_num >= fcb->config.num_sectors || !hdr)
+    {
+        return FCB_INVALID_ARG;
+    }
+
+    /* Calculate the physical flash address where the header is located */
+    uint32_t sector_addr = fcb->config.start_addr + 
+                           (sector_num * fcb->config.sector_size);
+    uint32_t header_addr = sector_addr + header_offset;
+
+    /* Read the header from flash */
+    int rc = fcb->config.flash_read(fcb->config.flash_ctx, header_addr,
+                                    (uint8_t *)hdr,
+                                    sizeof(fcb_record_hdr_t));
+
+    if (rc != 0)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    /* Sanity check: validate magic value */
+    if (hdr->magic != FCB_RECORD_MAGIC)
+    {
+        return FCB_CORRUPTED;
+    }
+
+    /* Sanity check: validate length (1–1024 bytes) */
+    if (hdr->length == 0 || hdr->length > FCB_MAX_RECORD_SIZE)
+    {
+        return FCB_CORRUPTED;
+    }
+
+    /* Sanity check: validate consumed flag */
+    if (hdr->consumed != FCB_RECORD_ACTIVE && hdr->consumed != FCB_RECORD_CONSUMED)
+    {
+        return FCB_CORRUPTED;
+    }
+
+    /* Sanity check: validate CRC-8 over first 6 bytes (magic, length, offset) */
+    uint8_t computed_crc = crc_gen((const uint8_t *)hdr, 6);
+    if (computed_crc != hdr->crc8)
+    {
+        return FCB_CORRUPTED;
     }
 
     return FCB_OK;
