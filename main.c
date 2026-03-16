@@ -550,6 +550,109 @@ static void test_fcb_init_recover_with_corrupt_record(void)
 }
 
 /* ================================================================== */
+/*  Lifecycle Simulation Tests                                         */
+/* ================================================================== */
+
+static void test_fcb_cycle_write_no_read_reinit(void)
+{
+    printf("Running test_fcb_cycle_write_no_read_reinit...\n");
+    flash_init();
+    
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    
+    uint8_t data[10] = {1,2,3,4,5,6,7,8,9,10};
+    rc = fcb_write(&fcb, data, 10);
+    assert(rc == FCB_OK);
+    rc = fcb_write(&fcb, data, 10);
+    assert(rc == FCB_OK);
+    
+    Fcb fcb2;
+    rc = fcb_init(&fcb2, &cfg);
+    assert(rc == FCB_OK);
+    
+    assert(fcb2.write_sector == 0);
+    assert(fcb2.write_offset == 46);
+    assert(fcb2.read_sector == 0);
+    assert(fcb2.read_offset == FCB_SECTOR_HDR_SIZE);
+    
+    printf("Passed test_fcb_cycle_write_no_read_reinit\n");
+}
+
+static void test_fcb_cycle_write_partial_read_reinit(void)
+{
+    printf("Running test_fcb_cycle_write_partial_read_reinit...\n");
+    flash_init();
+    
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    
+    uint8_t data[10] = {1,2,3,4,5,6,7,8,9,10};
+    fcb_write(&fcb, data, 10);
+    fcb_write(&fcb, data, 10);
+    
+    uint8_t buf[16];
+    size_t len_out = 0;
+    rc = fcb_read(&fcb, buf, sizeof(buf), &len_out);
+    assert(rc == FCB_OK);
+    
+    Fcb fcb2;
+    rc = fcb_init(&fcb2, &cfg);
+    assert(rc == FCB_OK);
+    
+    assert(fcb2.write_sector == 0);
+    assert(fcb2.write_offset == 46);
+    assert(fcb2.read_sector == 0);
+    assert(fcb2.read_offset == FCB_SECTOR_HDR_SIZE);
+    
+    printf("Passed test_fcb_cycle_write_partial_read_reinit\n");
+}
+
+static void test_fcb_cycle_write_read_delete_reinit(void)
+{
+    printf("Running test_fcb_cycle_write_read_delete_reinit...\n");
+    flash_init();
+    
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    
+    uint8_t data[10] = {1,2,3,4,5,6,7,8,9,10};
+    fcb_write(&fcb, data, 10);
+    fcb_write(&fcb, data, 10);
+    
+    uint8_t buf[16];
+    size_t len_out = 0;
+    rc = fcb_read(&fcb, buf, sizeof(buf), &len_out);
+    assert(rc == FCB_OK);
+    
+    rc = fcb_delete(&fcb);
+    assert(rc == FCB_OK);
+    
+    Fcb fcb2;
+    rc = fcb_init(&fcb2, &cfg);
+    assert(rc == FCB_OK);
+    
+    assert(fcb2.write_sector == 0);
+    assert(fcb2.write_offset == 46);
+    assert(fcb2.read_sector == 0);
+    assert(fcb2.read_offset == 31);
+    
+    printf("Passed test_fcb_cycle_write_read_delete_reinit\n");
+}
+
+/* ================================================================== */
 /*  Additional Write Tests                                            */
 /* ================================================================== */
 
@@ -642,6 +745,11 @@ int main(void)
     test_fcb_init_recover_chain_no_active();
     test_fcb_init_recover_with_consumed_sector();
     test_fcb_init_recover_with_corrupt_record();
+
+    printf("\n--- Running Lifecycle Tests ---\n");
+    test_fcb_cycle_write_no_read_reinit();
+    test_fcb_cycle_write_partial_read_reinit();
+    test_fcb_cycle_write_read_delete_reinit();
 
     printf("\n--- Running Write Split Tests ---\n");
     test_fcb_write_header_split();
