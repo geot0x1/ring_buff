@@ -39,8 +39,9 @@ extern "C" {
 #define FCB_RECORD_HDR_SIZE 8U
 
 /** Sector status values. */
-#define FCB_SECTOR_STATUS_ERASED  0xFFU
-#define FCB_SECTOR_STATUS_VALID   0xAAU
+#define FCB_SECTOR_STATUS_ERASED   0xFFU
+#define FCB_SECTOR_STATUS_VALID    0xAAU
+#define FCB_SECTOR_STATUS_CONSUMED 0x00U
 
 /** Record consumed-flag values. */
 #define FCB_RECORD_ACTIVE    0xFFU

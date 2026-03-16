@@ -7,7 +7,8 @@ The Flash Circular Buffer (FCB) is a robust, power-fail-safe, circular FIFO impl
 ### 1.1 Power-Fail Safety
 The FCB is designed to ensure that the buffer state remains recoverable at any point, even if power is lost during a write or erase operation.
 *   **Ordered Writes:** Record data is written first, followed by the record header at the end of the sector. Sector headers are written before any records in that sector. This allows the recovery process to identify partially written or corrupted data.
-*   **Atomic State Transitions:** NOR flash's property of only allowing bits to transition from 1 to 0 (unless erased) is exploited. The "consumed" flag transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
+*   **State Transitions:** Sector status transitions from erased (0xFF) → valid (0xAA) → consumed (0x55) only clear bits, exploiting NOR flash's write-once property.
+*   **Atomic Operations:** The "consumed" flag in record headers transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
 *   **CRC-8 Validation:** Every record header includes a CRC-8 of the header itself (excluding the consumed flag). This ensures that header corruption is detected.
 
 ### 1.2 NOR Flash Optimization
@@ -24,7 +25,7 @@ Located at the beginning of every sector.
 | :--- | :--- | :--- | :--- |
 | 0 | 4 | `magic` | `0x0FCBF1F0` ensures the sector is a valid FCB sector. |
 | 4 | 4 | `sequence` | Monotonically increasing number used to determine logical order. |
-| 8 | 1 | `status` | `0xFF` (erased) or `0xAA` (valid). |
+| 8 | 1 | `status` | `0xFF` (erased), `0xAA` (valid/active), or `0x00` (consumed). |
 | 9 | 7 | `reserved` | Future use. |
 
 #### Record Header (8 bytes)
@@ -122,6 +123,7 @@ Upon initialization, the FCB performs a full recovery scan:
 
 ### 3.5 Sector Discard (`fcb_discard_oldest_sector`)
 *   Erases the oldest sector, but only if all records within it are marked as consumed.
+*   Before erasure, the sector status is optionally transitioned to `0x55` (consumed) to indicate that all its records are consumed and it is ready for erasure.
 *   The `read_ptr` must have moved into a subsequent sector before the oldest can be erased.
 
 ## 4. API Reference
@@ -137,6 +139,20 @@ Upon initialization, the FCB performs a full recovery scan:
 | `fcb_is_empty` | Checks if there are any unconsumed records. |
 
 ## 5. Implementation Notes & Limitations
+
+### Sector Status Lifecycle
+The sector status field transitions through states following NOR flash's one-way bit clearing property:
+```
+0xFF (Erased) 
+  ↓ [write sector header]
+0xAA (Valid/Active) 
+  ↓ [mark all records consumed]
+0x00 (Consumed) 
+  ↓ [erase sector]
+0xFF (Erased)
+```
+
+Each transition represents clearing additional bits (1→0 transitions only on NOR flash). The consumed status (`0x00`) is marked before erasure as an optimization flag and recovery aid, allowing the system to quickly identify sectors that contain only fully-consumed data.
 
 > [!IMPORTANT]
 > **Header Offset Field:** The `offset` field in each record header specifies the byte position from the sector start where the record data is located. This allows for flexible data layout and efficient record header validation.
