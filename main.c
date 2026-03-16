@@ -652,6 +652,52 @@ static void test_fcb_cycle_write_read_delete_reinit(void)
     printf("Passed test_fcb_cycle_write_read_delete_reinit\n");
 }
 
+static void test_fcb_cycle_fill_all_sectors_reinit(void)
+{
+    printf("Running test_fcb_cycle_fill_all_sectors_reinit...\n");
+    flash_init();
+    
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    
+    uint8_t data[100];
+    for (int i = 0; i < 100; i++) data[i] = (uint8_t)i;
+    
+    int write_count = 0;
+    while (1)
+    {
+        rc = fcb_write(&fcb, data, sizeof(data));
+        if (rc == FCB_FULL)
+        {
+             break;
+        }
+        assert(rc == FCB_OK);
+        write_count++;
+    }
+    
+    printf("  Filled buffer with %d records before FCB_FULL\n", write_count);
+    
+    uint32_t last_write_sector = fcb.write_sector;
+    uint32_t last_write_offset = fcb.write_offset;
+    uint32_t last_read_sector = fcb.read_sector;
+    uint32_t last_read_offset = fcb.read_offset;
+
+    Fcb fcb2;
+    rc = fcb_init(&fcb2, &cfg);
+    assert(rc == FCB_OK);
+    
+    assert(fcb2.write_sector == last_write_sector);
+    assert(fcb2.write_offset == last_write_offset);
+    assert(fcb2.read_sector == last_read_sector);
+    assert(fcb2.read_offset == last_read_offset);
+    
+    printf("Passed test_fcb_cycle_fill_all_sectors_reinit\n");
+}
+
 /* ================================================================== */
 /*  Additional Write Tests                                            */
 /* ================================================================== */
@@ -750,6 +796,7 @@ int main(void)
     test_fcb_cycle_write_no_read_reinit();
     test_fcb_cycle_write_partial_read_reinit();
     test_fcb_cycle_write_read_delete_reinit();
+    test_fcb_cycle_fill_all_sectors_reinit();
 
     printf("\n--- Running Write Split Tests ---\n");
     test_fcb_write_header_split();
