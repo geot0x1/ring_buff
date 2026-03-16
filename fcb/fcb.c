@@ -113,6 +113,9 @@ static int fcb_flash_erase_sector(fcb_t *fcb, uint32_t addr);
 /* Sector operations */
 static int erase_sector(fcb_t *fcb, uint32_t sector_num);
 
+/* Read operations without locking */
+static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -851,6 +854,160 @@ int fcb_write(fcb_t *fcb, const uint8_t *data, size_t len)
     return FCB_OK;
 }
 
+/**
+ * Read the next record from the FCB without locking.
+ *
+ * This is the internal implementation called by fcb_read after argument
+ * validation and locking. It assumes the caller has already:
+ *   - Validated all arguments
+ *   - Acquired the mutex (via fcb_lock)
+ *   - Caller is responsible for releasing the mutex (via fcb_unlock)
+ *
+ * @param fcb       Initialised FCB instance (assumed valid).
+ * @param buf       Output buffer for record data (assumed non-NULL).
+ * @param buf_len   Size of output buffer (assumed > 0).
+ * @param len_out   Pointer to store record length (assumed non-NULL).
+ *
+ * @return FCB_OK on success, FCB_EMPTY if no unread records,
+ *         FCB_CORRUPTED if record is invalid, FCB_INVALID_ARG if 
+ *         record doesn't fit in buffer, or FCB_ERR_FLASH if read fails.
+ */
+static int fcb_read_nolock(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
+{
+    /* Check if buffer is empty (no unread records) */
+    if (fcb->read_ptr_sector == fcb->write_ptr_sector &&
+        fcb->read_ptr_offset == fcb->write_ptr_offset)
+    {
+        return FCB_EMPTY;
+    }
+
+    /* 
+     * Read the record header at the current read_ptr location.
+     * The read_ptr points to the start of record data within a sector.
+     * We need to find the corresponding record header at the end of the sector.
+     *
+     * Strategy: walk record headers from the sector end (growing downward) to find
+     * the header whose offset field matches read_ptr_offset.
+     */
+
+    uint32_t sector_num = fcb->read_ptr_sector;
+    uint32_t data_offset = fcb->read_ptr_offset;
+    fcb_record_hdr_t rec_hdr;
+    bool found_header = false;
+
+    /* Scan record headers from end of sector downward */
+    uint32_t sector_end = fcb->config.sector_size;
+    uint32_t header_offset = sector_end - FCB_RECORD_HDR_SIZE;
+
+    for (uint32_t i = 0; i < sector_end / FCB_RECORD_HDR_SIZE; i++)
+    {
+        if (header_offset < FCB_SECTOR_HDR_SIZE)
+        {
+            break;  /* Reached sector header area */
+        }
+
+        int rc = read_record_header(fcb, sector_num, header_offset, &rec_hdr);
+
+        if (rc != FCB_OK)
+        {
+            /* Invalid header — continue searching */
+            header_offset -= FCB_RECORD_HDR_SIZE;
+            continue;
+        }
+
+        /* Check if this header's offset matches the read_ptr offset */
+        if (rec_hdr.offset == data_offset && rec_hdr.consumed == FCB_RECORD_ACTIVE)
+        {
+            found_header = true;
+            break;
+        }
+
+        header_offset -= FCB_RECORD_HDR_SIZE;
+    }
+
+    if (!found_header)
+    {
+        return FCB_CORRUPTED;  /* Record header not found or not active */
+    }
+
+    /* Validate record length fits in output buffer */
+    if (rec_hdr.length > buf_len)
+    {
+        return FCB_INVALID_ARG;
+    }
+
+    /* 
+     * Read record data from flash.
+     * The data may span across sector boundaries, so we need to handle that.
+     */
+
+    uint32_t bytes_to_read = rec_hdr.length;
+    uint32_t bytes_read = 0;
+    uint32_t current_sector = sector_num;
+    uint32_t current_offset = data_offset;
+
+    while (bytes_to_read > 0)
+    {
+        /* Calculate how many bytes we can read from the current sector */
+        uint32_t bytes_available_in_sector = fcb->config.sector_size - current_offset;
+        uint32_t bytes_this_read = (bytes_to_read < bytes_available_in_sector) ?
+                                    bytes_to_read : bytes_available_in_sector;
+
+        /* Calculate physical flash address */
+        uint32_t sector_addr = fcb->config.start_addr + (current_sector * fcb->config.sector_size);
+        uint32_t flash_addr = sector_addr + current_offset;
+
+        /* Read data from flash */
+        int rc = fcb_flash_read(fcb, flash_addr, &buf[bytes_read], bytes_this_read);
+        if (rc != 0)
+        {
+            return FCB_ERR_FLASH;
+        }
+
+        bytes_read += bytes_this_read;
+        bytes_to_read -= bytes_this_read;
+
+        if (bytes_to_read > 0)
+        {
+            /* Move to next sector for remainder of record */
+            current_sector = (current_sector + 1) % fcb->config.num_sectors;
+            current_offset = FCB_SECTOR_HDR_SIZE;
+        }
+    }
+
+    /* Return the record length */
+    *len_out = rec_hdr.length;
+
+    /* 
+     * Advance read_ptr to the next record.
+     * Calculate where the data ends in flash.
+     */
+    uint32_t data_end_offset = data_offset + rec_hdr.length;
+    uint32_t next_sector = sector_num;
+    uint32_t next_offset = data_end_offset;
+
+    /* Handle sector boundary crossing */
+    while (next_offset >= fcb->config.sector_size)
+    {
+        next_offset -= fcb->config.sector_size;
+        next_sector = (next_sector + 1) % fcb->config.num_sectors;
+    }
+
+    /* Ensure next_offset is at least at sector header end */
+    if (next_offset < FCB_SECTOR_HDR_SIZE)
+    {
+        next_offset = FCB_SECTOR_HDR_SIZE;
+    }
+
+    fcb->read_ptr_sector = next_sector;
+    fcb->read_ptr_offset = next_offset;
+
+    FCB_LOG("Read record: sector=%u, offset=%u, length=%u\n",
+            sector_num, data_offset, rec_hdr.length);
+
+    return FCB_OK;
+}
+
 int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
 {
     if (!fcb || fcb->magic != FCB_INIT_MAGIC || !fcb->is_mounted ||
@@ -859,12 +1016,11 @@ int fcb_read(fcb_t *fcb, uint8_t *buf, size_t buf_len, size_t *len_out)
         return FCB_INVALID_ARG;
     }
 
-    (void)fcb;
-    (void)buf;
-    (void)buf_len;
-    (void)len_out;
+    fcb_lock(fcb);
+    int rc = fcb_read_nolock(fcb, buf, buf_len, len_out);
+    fcb_unlock(fcb);
 
-    return FCB_EMPTY;
+    return rc;
 }
 
 int fcb_delete(fcb_t *fcb)
