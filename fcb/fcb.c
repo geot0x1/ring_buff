@@ -31,6 +31,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 
 /* ================================================================== */
 /*  Internal magic for the initialised fcb_t struct                    */
@@ -351,17 +352,226 @@ int fcb_init(fcb_t *fcb, const fcb_config_t *cfg)
     memset(fcb, 0, sizeof(*fcb));
     memcpy(&fcb->config, cfg, sizeof(*cfg));
 
-    /* Set initial pointers to a sane state. */
-    fcb->delete_ptr_sector = 0;
-    fcb->delete_ptr_offset = FCB_SECTOR_HDR_SIZE;
-    fcb->read_ptr_sector   = 0;
-    fcb->read_ptr_offset   = FCB_SECTOR_HDR_SIZE;
-    fcb->write_ptr_sector  = 0;
-    fcb->write_ptr_offset  = FCB_SECTOR_HDR_SIZE;
-    fcb->next_sequence     = 1;
+    /* ================================================================ */
+    /*  Phase 1: Scan all sector headers to find oldest and newest      */
+    /* ================================================================ */
 
-    fcb->magic      = FCB_INIT_MAGIC;
+    uint32_t oldest_sector = 0;
+    uint32_t newest_sector = 0;
+    uint32_t oldest_sequence = UINT32_MAX;
+    uint32_t newest_sequence = 0;
+    int      valid_sectors = 0;
+
+    for (uint32_t i = 0; i < fcb->config.num_sectors; i++)
+    {
+        fcb_sector_hdr_t sector_hdr;
+        int rc = read_sector_header(fcb, i, &sector_hdr);
+
+        /* If sector header is invalid/corrupted, skip it (it's erased) */
+        if (rc != FCB_OK)
+        {
+            continue;
+        }
+
+        /* Track oldest and newest valid sectors by sequence number */
+        if (sector_hdr.sequence < oldest_sequence)
+        {
+            oldest_sequence = sector_hdr.sequence;
+            oldest_sector = i;
+        }
+
+        if (sector_hdr.sequence > newest_sequence)
+        {
+            newest_sequence = sector_hdr.sequence;
+            newest_sector = i;
+        }
+
+        valid_sectors++;
+    }
+
+    /* If no valid sectors found, initialize to empty state */
+    if (valid_sectors == 0)
+    {
+        fcb->delete_ptr_sector = 0;
+        fcb->delete_ptr_offset = FCB_SECTOR_HDR_SIZE;
+        fcb->read_ptr_sector   = 0;
+        fcb->read_ptr_offset   = FCB_SECTOR_HDR_SIZE;
+        fcb->write_ptr_sector  = 0;
+        fcb->write_ptr_offset  = FCB_SECTOR_HDR_SIZE;
+        fcb->write_data_ptr_sector = 0;
+        fcb->write_data_ptr_offset = FCB_SECTOR_HDR_SIZE;
+        fcb->next_sequence = 1;
+
+        fcb->magic = FCB_INIT_MAGIC;
+        fcb->is_mounted = true;
+
+        return FCB_OK;
+    }
+
+    /* ================================================================ */
+    /*  Phase 2a: Find read_ptr (tail) — first unread record           */
+    /* ================================================================ */
+
+    uint32_t current_sector = oldest_sector;
+    uint32_t read_ptr_sector = 0;
+    uint32_t read_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    bool read_ptr_found = false;
+
+    /* Walk from oldest sector until we find an unread record */
+    for (int walks = 0; walks < (int)fcb->config.num_sectors; walks++)
+    {
+        fcb_sector_hdr_t sector_hdr;
+        int rc = read_sector_header(fcb, current_sector, &sector_hdr);
+
+        if (rc != FCB_OK)
+        {
+            /* Skip erased/corrupted sectors */
+            current_sector = (current_sector + 1) % fcb->config.num_sectors;
+            continue;
+        }
+
+        /* Scan record headers in this sector from top (lowest addr) downward */
+        uint32_t sector_end = fcb->config.sector_size;
+        uint32_t header_offset = sector_end - FCB_RECORD_HDR_SIZE;
+
+        for (uint32_t i = 0; i < sector_end / FCB_RECORD_HDR_SIZE; i++)
+        {
+            if (header_offset < FCB_SECTOR_HDR_SIZE)
+            {
+                break;  /* Reached sector header area */
+            }
+
+            fcb_record_hdr_t rec_hdr;
+            rc = read_record_header(fcb, current_sector, header_offset, &rec_hdr);
+
+            if (rc != FCB_OK)
+            {
+                /* Invalid record header — treat as end of valid data in this sector */
+                break;
+            }
+
+            /* Check if this is an unread record (consumed flag = 0xFF) */
+            if (rec_hdr.consumed == FCB_RECORD_ACTIVE)
+            {
+                read_ptr_sector = current_sector;
+                read_ptr_offset = rec_hdr.offset;
+                read_ptr_found = true;
+
+                FCB_LOG("Recovery: Found read_ptr at sector %u, offset %u\n",
+                        read_ptr_sector, read_ptr_offset);
+                break;
+            }
+
+            /* Move to next record header (growing downward from sector end) */
+            header_offset -= FCB_RECORD_HDR_SIZE;
+        }
+
+        if (read_ptr_found)
+        {
+            break;
+        }
+
+        /* If sector contains only consumed records, mark it as consumed before
+           moving to next sector */
+        if (sector_hdr.status == FCB_SECTOR_STATUS_VALID)
+        {
+            (void)write_sector_header(fcb, current_sector, sector_hdr.sequence,
+                                      FCB_SECTOR_STATUS_CONSUMED);
+        }
+
+        /* Move to next sector */
+        current_sector = (current_sector + 1) % fcb->config.num_sectors;
+    }
+
+    /* If no unread records found, use oldest sector start */
+    if (!read_ptr_found)
+    {
+        read_ptr_sector = oldest_sector;
+        read_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    }
+
+    /* ================================================================ */
+    /*  Phase 2b: Find write_ptr (head) — position after last record   */
+    /* ================================================================ */
+
+    uint32_t write_ptr_sector = newest_sector;
+    uint32_t write_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    uint32_t write_data_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    bool write_ptr_found = false;
+
+    /* Scan record headers in newest sector from bottom (highest addr) upward */
+    fcb_sector_hdr_t newest_sector_hdr;
+    int rc = read_sector_header(fcb, newest_sector, &newest_sector_hdr);
+
+    if (rc == FCB_OK)
+    {
+        uint32_t sector_end = fcb->config.sector_size;
+        uint32_t last_header_offset = sector_end - FCB_RECORD_HDR_SIZE;
+
+        /* Walk from end of sector backward to find last valid record */
+        for (uint32_t i = 0; i < sector_end / FCB_RECORD_HDR_SIZE; i++)
+        {
+            uint32_t header_offset = sector_end - (i * FCB_RECORD_HDR_SIZE);
+
+            if (header_offset <= FCB_SECTOR_HDR_SIZE)
+            {
+                break;  /* Reached sector header area */
+            }
+
+            header_offset -= FCB_RECORD_HDR_SIZE;
+
+            fcb_record_hdr_t rec_hdr;
+            rc = read_record_header(fcb, newest_sector, header_offset, &rec_hdr);
+
+            if (rc == FCB_OK)
+            {
+                /* Found a valid record — position write_ptr after it */
+                /* Since headers grow downward, next header goes FCB_RECORD_HDR_SIZE bytes before this one */
+                write_ptr_offset = (header_offset >= FCB_RECORD_HDR_SIZE) ?
+                                   (header_offset - FCB_RECORD_HDR_SIZE) : FCB_SECTOR_HDR_SIZE;
+                write_data_ptr_offset = rec_hdr.offset + rec_hdr.length;
+
+                FCB_LOG("Recovery: Found last record at sector %u, "
+                        "offset %u, length %u\n",
+                        newest_sector, rec_hdr.offset, rec_hdr.length);
+
+                write_ptr_found = true;
+                break;
+            }
+        }
+    }
+
+    /* If no records found in newest sector, start from sector start */
+    if (!write_ptr_found)
+    {
+        write_ptr_offset = FCB_SECTOR_HDR_SIZE;
+        write_data_ptr_offset = FCB_SECTOR_HDR_SIZE;
+    }
+
+    /* ================================================================ */
+    /*  Phase 3: Initialize FCB state with recovered pointers           */
+    /* ================================================================ */
+
+    fcb->delete_ptr_sector = read_ptr_sector;
+    fcb->delete_ptr_offset = read_ptr_offset;
+
+    fcb->read_ptr_sector = read_ptr_sector;
+    fcb->read_ptr_offset = read_ptr_offset;
+
+    fcb->write_ptr_sector = write_ptr_sector;
+    fcb->write_ptr_offset = write_ptr_offset;
+
+    fcb->write_data_ptr_sector = write_ptr_sector;
+    fcb->write_data_ptr_offset = write_data_ptr_offset;
+
+    /* Next sequence number is one more than newest sector */
+    fcb->next_sequence = (valid_sectors > 0) ? (newest_sequence + 1) : 1;
+
+    fcb->magic = FCB_INIT_MAGIC;
     fcb->is_mounted = true;
+
+    FCB_LOG("Recovery complete: oldest_seq=%u, newest_seq=%u, next_seq=%u\n",
+            oldest_sequence, newest_sequence, fcb->next_sequence);
 
     return FCB_OK;
 }
