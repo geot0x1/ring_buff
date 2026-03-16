@@ -7,7 +7,7 @@ The Flash Circular Buffer (FCB) is a robust, power-fail-safe, circular FIFO impl
 ### 1.1 Power-Fail Safety
 The FCB is designed to ensure that the buffer state remains recoverable at any point, even if power is lost during a write or erase operation.
 *   **Ordered Writes:** Record data is written first, followed by the record header at the end of the sector. Sector headers are written before any records in that sector. This allows the recovery process to identify partially written or corrupted data.
-*   **State Transitions:** Sector status transitions from erased (0xFF) → valid (0xAA) → consumed (0x55) only clear bits, exploiting NOR flash's write-once property.
+*   **State Transitions:** Sector status transitions from erased (0xFF) → valid (0xAA) → consumed (0x00) only clear bits, exploiting NOR flash's write-once property.
 *   **Atomic Operations:** The "consumed" flag in record headers transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
 *   **CRC-8 Validation:** Every record header includes a CRC-8 of the header itself (excluding the consumed flag). This ensures that header corruption is detected.
 
@@ -134,8 +134,8 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 
 ### 3.5 Sector Trim (`fcb_trim`)
 *   Erases the oldest sector, but only if all records within it are marked as consumed.
-*   Before erasure, the sector status is optionally transitioned to `0x55` (consumed) to indicate that all its records are consumed and it is ready for erasure.
-*   The `read_ptr` must have moved into a subsequent sector before the oldest can be erased.
+*   **Mark as Consumed:** When all records in the sector are consumed, the sector status flag is written to `0x00` to mark the entire sector as consumed before erasure.
+*   **Pointer Advancement:** If `read_ptr` or `delete_ptr` are pointing into the sector being erased, they are automatically advanced to point at the first valid FCB record in the next sector. This ensures these pointers remain valid after the sector is erased.
 
 ## 4. API Reference
 
