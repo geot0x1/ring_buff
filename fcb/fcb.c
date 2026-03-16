@@ -27,6 +27,7 @@
  */
 
 #include "fcb.h"
+#include "crc_gen.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -72,6 +73,9 @@ static inline void fcb_unlock(fcb_t *fcb)
 static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
                                uint32_t sequence, uint8_t status);
 
+static int write_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t offset,
+                               uint16_t length);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -110,6 +114,68 @@ static int write_sector_header(fcb_t *fcb, uint32_t sector_num,
     int rc = fcb->config.flash_program(fcb->config.flash_ctx, sector_addr,
                                        (const uint8_t *)&hdr,
                                        sizeof(fcb_sector_hdr_t));
+
+    if (rc != 0)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    return FCB_OK;
+}
+
+/* ================================================================== */
+/*  Record header writer                                               */
+/* ================================================================== */
+
+/**
+ * Write a record header to flash at the write_ptr location within a sector.
+ *
+ * Record headers are placed at the END (highest address) of a sector, 
+ * growing downward. The header is always written entirely within the sector.
+ *
+ * @param fcb        Initialised FCB instance.
+ * @param sector_num Sector number where the header will be written (0..num_sectors-1).
+ * @param offset     Byte offset from sector start where the record payload begins.
+ * @param length     Size of the record payload (1–1024 bytes).
+ * 
+ * @return FCB_OK on success, FCB_INVALID_ARG if input is invalid,
+ *         or FCB_ERR_FLASH if the flash program operation fails.
+ */
+static int write_record_header(fcb_t *fcb, uint32_t sector_num, uint32_t offset,
+                               uint16_t length)
+{
+    /* Validate sector number */
+    if (sector_num >= fcb->config.num_sectors)
+    {
+        return FCB_INVALID_ARG;
+    }
+
+    /* Validate record length */
+    if (length == 0 || length > FCB_MAX_RECORD_SIZE)
+    {
+        return FCB_INVALID_ARG;
+    }
+
+    /* Construct the record header */
+    fcb_record_hdr_t hdr;
+    hdr.magic    = FCB_RECORD_MAGIC;
+    hdr.length   = length;
+    hdr.offset   = offset;
+    hdr.consumed = FCB_RECORD_ACTIVE;
+
+    /* Calculate CRC-8 of the header (excluding consumed flag and crc8 field) */
+    /* CRC is computed over the first 6 bytes: magic, length, offset */
+    hdr.crc8 = crc_gen((const uint8_t *)&hdr, 6);
+
+    /* Calculate the physical flash address where the header will be written */
+    uint32_t sector_addr = fcb->config.start_addr + 
+                           (sector_num * fcb->config.sector_size);
+    uint32_t header_addr = sector_addr + fcb->config.sector_size - FCB_RECORD_HDR_SIZE;
+
+    /* Program the header to flash */
+    int rc = fcb->config.flash_program(fcb->config.flash_ctx, header_addr,
+                                       (const uint8_t *)&hdr,
+                                       sizeof(fcb_record_hdr_t));
 
     if (rc != 0)
     {
