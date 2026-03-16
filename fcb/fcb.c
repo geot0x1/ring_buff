@@ -110,6 +110,9 @@ static int fcb_flash_program(fcb_t *fcb, uint32_t addr, const uint8_t *data, siz
 
 static int fcb_flash_erase_sector(fcb_t *fcb, uint32_t addr);
 
+/* Sector operations */
+static int erase_sector(fcb_t *fcb, uint32_t sector_num);
+
 /* ================================================================== */
 /*  Sector header writer                                               */
 /* ================================================================== */
@@ -728,6 +731,27 @@ static int fcb_flash_erase_sector(fcb_t *fcb, uint32_t addr)
     }
 
     return fcb->config.flash_erase_sector(fcb->config.flash_ctx, addr);
+}
+
+/**
+ * Erase a sector by sector number.
+ *
+ * Calculates the base address of the sector and calls the erase operation.
+ *
+ * @param fcb        FCB instance.
+ * @param sector_num Sector number (0..num_sectors-1).
+ * @return FCB_OK on success, FCB_INVALID_ARG if sector_num is out of range,
+ *         or FCB_ERR_FLASH if erase fails.
+ */
+static int erase_sector(fcb_t *fcb, uint32_t sector_num)
+{
+    if (!fcb || sector_num >= fcb->config.num_sectors)
+    {
+        return FCB_INVALID_ARG;
+    }
+
+    uint32_t sector_addr = fcb->config.start_addr + (sector_num * fcb->config.sector_size);
+    return fcb_flash_erase_sector(fcb, sector_addr);
 }
 
 /* ================================================================== */
