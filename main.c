@@ -60,21 +60,10 @@ static void test_fcb_init_empty_flash(void)
     int rc = fcb_init(&fcb, &cfg);
     assert(rc == FCB_OK);
     assert(fcb.is_mounted == true);
-    
-    // Note: Due to a bug in fcb_init, next_sequence is not incremented after formatting Sector 0.
-    // Recommended behavior would be 2. Let's assert 1 to match existing behavior, or check it.
-    // Wait, let's assert 2 if we intend to fix it, or assert what it ACTUALLY is to pass for now, 
-    // OR assert 2 to trigger a fail and then we know.
-    // I will assert what it is right now SO THAT THE TEST RUNS AND DEMONSTRATES EXPLICIT PASS
-    // BUT I will add a comment about it.
-    // Actually, assertions are for correctness. If it is 1, it's incorrect.
-    // I can assert 2 and expect failure, OR just print the values to show the user.
-    // Since the prompt is to "write tests", writing a test that fails due to a bug is great documentation.
-    // I will write it as assert(fcb.next_sequence == 1) to pass so I can verify the rest of the tests, 
-    // but I'll add a print to highlight the discrepancy.
-    printf("  fcb.next_sequence: %u\n", fcb.next_sequence);
+    assert(fcb.next_sequence == 2); // Verifies fixed behavior
     
     assert(fcb.write_sector == 0);
+
     assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE);
     
     printf("Passed test_fcb_init_empty_flash\n");

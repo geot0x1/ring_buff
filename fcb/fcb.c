@@ -422,12 +422,18 @@ static int fcb_find_oldest_newest(fcb_t *fcb, int *oldest_out, int *newest_out, 
 static int fcb_init_format_initial(fcb_t *fcb)
 {
     fcb_init_empty_state(fcb);
-    int rc = erase_sector(fcb, 0);
+    int rc = erase_sector(fcb, fcb->write_sector);
     if (rc != FCB_OK)
     {
         return rc;
     }
-    return write_sector_header(fcb, 0, 1, FCB_SECTOR_STATUS_VALID);
+    
+    rc = write_sector_header(fcb, fcb->write_sector, fcb->next_sequence, FCB_SECTOR_STATUS_VALID);
+    if (rc == FCB_OK)
+    {
+        fcb->next_sequence = 2; // Sector 0 is Seq 1, next sector should be Seq 2
+    }
+    return rc;
 }
 
 /**
