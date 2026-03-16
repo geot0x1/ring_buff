@@ -126,7 +126,6 @@ Upon initialization, the FCB performs a full recovery scan with two separate wal
 
 ### 3.3 Reading Records (`fcb_read`)
 *   Reads entries sequentially in circular order starting at `read_ptr`.
-*   To locate records: begins at the oldest sector and walks the FCB records at the top of the record header region, scanning from lowest to highest address within each sector, until it finds the record at `read_ptr`.
 *   Continues reading records sequentially through the circular buffer until it reaches `write_ptr` (the end of written data).
 *   Each record must have: valid magic (`0xFCBA`), valid CRC-8, and `consumed` flag = `0xFF` (unread).
 *   Validates the record's CRC and magic before returning the data.
