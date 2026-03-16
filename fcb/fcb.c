@@ -94,6 +94,7 @@ static int fcb_recover_pointers_chain(fcb_t *fcb, int oldest_sector, int newest_
 
 /* Utility functions */
 static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num);
+static bool fcb_is_range_erased(fcb_t *fcb, uint32_t sector_num, uint32_t offset);
 static uint8_t fcb_calc_crc8(uint8_t start_crc, const uint8_t *data, uint32_t len);
 
 /* Flash driver wrappers with NULL protection */
@@ -215,6 +216,34 @@ static bool fcb_is_sector_erased(fcb_t *fcb, uint32_t sector_num)
     }
 
     return true;  /* Entire sector is erased */
+}
+
+static bool fcb_is_range_erased(fcb_t *fcb, uint32_t sector_num, uint32_t offset)
+{
+    if (!fcb || sector_num >= fcb->config.num_sectors || offset >= fcb->config.sector_size) return false;
+
+    const uint32_t FCB_PAGE_SIZE = 256U;
+    uint8_t page_buf[FCB_PAGE_SIZE];
+    uint32_t sector_addr = fcb->config.start_addr + (sector_num * fcb->config.sector_size);
+    uint32_t remaining = fcb->config.sector_size - offset;
+    uint32_t curr_offset = offset;
+
+    while (remaining > 0)
+    {
+        size_t bytes_to_read = (remaining < FCB_PAGE_SIZE) ? remaining : FCB_PAGE_SIZE;
+
+        int rc = fcb_flash_read(fcb, sector_addr + curr_offset, page_buf, bytes_to_read);
+        if (rc != 0) return false;
+
+        for (size_t i = 0; i < bytes_to_read; i++)
+        {
+            if (page_buf[i] != 0xFF) return false; 
+        }
+        
+        curr_offset += bytes_to_read;
+        remaining -= bytes_to_read;
+    }
+    return true; 
 }
 
 /* ================================================================== */
@@ -482,6 +511,13 @@ static int fcb_recover_pointers_single(fcb_t *fcb, int sector)
     }
 
     fcb->write_sector = (uint32_t)sector;
+    if (last_valid_offset < fcb->config.sector_size)
+    {
+        if (!fcb_is_range_erased(fcb, (uint32_t)sector, last_valid_offset))
+        {
+            last_valid_offset = fcb->config.sector_size; // Force wrap
+        }
+    }
     fcb->write_offset = last_valid_offset;
 
     if (!read_ptr_found)
@@ -568,6 +604,13 @@ static int fcb_recover_pointers_chain(fcb_t *fcb, int oldest_sector, int newest_
             }
             else
             {
+                if (last_valid_offset < fcb->config.sector_size)
+                {
+                    if (!fcb_is_range_erased(fcb, curr_sector, last_valid_offset))
+                    {
+                        last_valid_offset = fcb->config.sector_size; // Force wrap
+                    }
+                }
                 fcb->write_offset = last_valid_offset;
             }
             break; 
