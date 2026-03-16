@@ -83,7 +83,7 @@ v
 *   **Layout Inversion:** Sector headers and record headers are now located at the END (highest address) of each sector. Data payloads grow upward from the sector start. Record headers contain an `offset` field that points to where each record's data begins within the sector.
 *   **Header-Aware Offset:** The `offset` field in each record header is the absolute byte position from the sector start where the record data is located.
 *   **Record Walk Order:** When walking/scanning FCB records within a sector, start from the top (lowest address) of the record header region and advance toward the sector end. This ensures records are encountered in data write order.
-*   **Data Spanning:** Record data can cross sector boundaries. When data spans into the next sector, it continues immediately after the next sector's header.
+*   **No Cross-Sector Spanning:** Record payloads and their corresponding record headers must reside entirely within a single sector. If there is not enough room in the current sector for the entire record (data + header), the write operation begins in the next sector.
 *   **New Sector Opening:** If a record cannot fit in the current sector (not enough space for data + header), a new sector is created with a fresh sector header. The new record is then written to this new sector.
 
 ### 2.3 Memory Representation (RAM)
