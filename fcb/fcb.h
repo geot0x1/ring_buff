@@ -77,7 +77,7 @@ typedef struct
  *   Offset  Size  Field
  *   0       1     magic       (0xBA, identifies a valid record header)
  *   1       2     length      (1–1024)
- *   3       1     status      (0xFF = active, 0x00 = consumed)
+ *   3       1     status      (active != 0x00, 0x00 = consumed)
  */
 #pragma pack(push, 1)
 typedef struct

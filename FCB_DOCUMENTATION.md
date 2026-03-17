@@ -37,7 +37,7 @@ Located sequentially within the sector. Each record header is followed by the re
 | :--- | :--- | :--- | :--- |
 | 0 | 1 | `magic` | Identifies a valid record header. |
 | 1 | 2 | `length` | Size of the data payload (1–1024 bytes). |
-| 3 | 1 | `status` | `0xFF` (good/unread) or `0x00` (consumed). |
+| 3 | 1 | `status` | Active (active != `0x00`) or `0x00` (consumed). |
 
 **Record Entry format:**
 `<magic><len1><len2><status><data><data_crc8>`
