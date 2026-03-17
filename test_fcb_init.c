@@ -11,6 +11,13 @@
 
 void test_fcb_init_placeholder(void);
 void test_fcb_get_next_valid_record_image(void);
+void test_fcb_init_cold_start(void);
+void test_fcb_init_single_sector_normal(void);
+void test_fcb_init_multi_sector_chain(void);
+void test_fcb_init_wrap_around(void);
+void test_fcb_init_interrupted_erase(void);
+void test_fcb_init_corrupt_scavenge(void);
+void test_fcb_init_spanning_record(void);
 
 /* ================================================================== */
 /*  Test Implementations                                              */
@@ -68,6 +75,128 @@ void test_fcb_get_next_valid_record_image(void)
     flash_deinit();
 }
 
+void test_fcb_init_cold_start(void)
+{
+    flash_init("../simulation_images/cold_start.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(16, fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(16, fcb.read_offset);
+    TEST_ASSERT_EQUAL_UINT32(2, fcb.next_sequence);
+    flash_deinit();
+}
+
+void test_fcb_init_single_sector_normal(void)
+{
+    flash_init("../simulation_images/single_sector_normal.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(54, fcb.write_offset); 
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(16, fcb.read_offset);
+    flash_deinit();
+}
+
+void test_fcb_init_multi_sector_chain(void)
+{
+    flash_init("../simulation_images/multi_sector_chain.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(2, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(35, fcb.write_offset); 
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(16, fcb.read_offset);
+    TEST_ASSERT_EQUAL_UINT32(4, fcb.next_sequence);
+    flash_deinit();
+}
+
+void test_fcb_init_wrap_around(void)
+{
+    flash_init("../simulation_images/wrap_around_chain.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(2, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(23, fcb.write_offset); 
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(16, fcb.read_offset);
+    flash_deinit();
+}
+
+void test_fcb_init_interrupted_erase(void)
+{
+    flash_init("../simulation_images/interrupted_erase.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(16, fcb.write_offset); 
+    flash_deinit();
+}
+
+void test_fcb_init_corrupt_scavenge(void)
+{
+    flash_init("../simulation_images/corrupt_scavenge.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(73, fcb.write_offset); 
+    flash_deinit();
+}
+
+void test_fcb_init_spanning_record(void)
+{
+    flash_init("../simulation_images/spanning_record.bin");
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 65536;
+    cfg.num_sectors = 4;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(1, fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(58, fcb.write_offset); 
+    flash_deinit();
+}
+
 /* ================================================================== */
 /*  Runner Implementation                                            */
 /* ================================================================== */
@@ -76,4 +205,11 @@ void run_fcb_init_tests(void)
 {
     RUN_TEST(test_fcb_init_placeholder);
     RUN_TEST(test_fcb_get_next_valid_record_image);
+    RUN_TEST(test_fcb_init_cold_start);
+    RUN_TEST(test_fcb_init_single_sector_normal);
+    RUN_TEST(test_fcb_init_multi_sector_chain);
+    RUN_TEST(test_fcb_init_wrap_around);
+    RUN_TEST(test_fcb_init_interrupted_erase);
+    RUN_TEST(test_fcb_init_corrupt_scavenge);
+    RUN_TEST(test_fcb_init_spanning_record);
 }
