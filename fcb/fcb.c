@@ -739,6 +739,36 @@ int fcb_init(Fcb *fcb, const FcbConfig *cfg)
         return rc;
     }
 
+    /* Detect and recover from half-erased sectors (power loss during erase).
+     * If the designated write sector contains partial data but no valid header,
+     * it's likely an interrupted erase. Re-erase it to ensure a clean slate.
+     */
+    if (!fcb_is_sector_erased(fcb, fcb->write_sector))
+    {
+        FcbSectorHdr check_hdr;
+        int check_rc = read_sector_header(fcb, fcb->write_sector, &check_hdr);
+        
+        /* If read fails or header magic is invalid, the sector is half-erased */
+        if (check_rc != FCB_OK || check_hdr.magic != FCB_SECTOR_MAGIC)
+        {
+            rc = erase_sector(fcb, fcb->write_sector);
+            if (rc != FCB_OK)
+            {
+                return rc;
+            }
+
+            /* Reinitialize the sector header and reset write pointer */
+            rc = write_sector_header(fcb, fcb->write_sector, fcb->next_sequence++,
+                                     FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+            if (rc != FCB_OK)
+            {
+                return rc;
+            }
+
+            fcb->write_offset = FCB_SECTOR_HDR_SIZE;
+        }
+    }
+
     fcb->magic = FCB_INIT_MAGIC;
     fcb->is_mounted = true;
 

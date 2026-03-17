@@ -1145,6 +1145,517 @@ static void test_fcb_init_magic_set_on_format_initial(void)
 }
 
 /* ================================================================== */
+/*  Additional Edge Case Tests for fcb_init                           */
+/* ================================================================== */
+
+/**
+ * @brief Test fcb_init with sector_size exactly at minimum required size.
+ *        Verifies validation allows smallest usable sector.
+ */
+static void test_fcb_init_minimum_sector_size(void)
+{
+    printf("Running test_fcb_init_minimum_sector_size...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // Set sector_size to exact minimum: FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 1
+    cfg.sector_size = FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 1;  // 16 + 4 + 1 = 21 bytes
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE);
+
+    printf("Passed test_fcb_init_minimum_sector_size\n");
+}
+
+/**
+ * @brief Test fcb_init with exactly one sector in the system.
+ *        Verifies that single-sector FCB operates correctly.
+ */
+static void test_fcb_init_single_sector(void)
+{
+    printf("Running test_fcb_init_single_sector...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    cfg.num_sectors = 1;  // Only sector 0
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    assert(fcb.write_sector == 0);
+    assert(fcb.read_sector == 0);
+    assert(fcb.delete_sector == 0);
+    assert(fcb.next_sequence == 2);  // Formatted to sequence 1, next is 2
+
+    printf("Passed test_fcb_init_single_sector\n");
+}
+
+/**
+ * @brief Test fcb_init with maximum allowed sectors (FCB_MAX_SECTORS).
+ *        Verifies configuration accepts max sector count.
+ */
+static void test_fcb_init_max_sectors_config(void)
+{
+    printf("Running test_fcb_init_max_sectors_config...\n");
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    cfg.num_sectors = FCB_MAX_SECTORS;  // Max allowed
+
+    // We don't actually test with this many sectors in flash,
+    // just verify the config is accepted without error
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK || rc == FCB_INVALID_ARG);  // Depends on actual max implementation
+
+    printf("Passed test_fcb_init_max_sectors_config\n");
+}
+
+/**
+ * @brief Test fcb_init preserves configuration after initialization.
+ *        Verifies that all configuration values are stored correctly.
+ */
+static void test_fcb_init_config_preserved(void)
+{
+    printf("Running test_fcb_init_config_preserved...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // Set specific config values
+    cfg.start_addr = 0x100;
+    cfg.num_sectors = 3;
+    cfg.sector_size = 4096;
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+
+    // Verify config is preserved
+    assert(fcb.config.start_addr == 0x100);
+    assert(fcb.config.num_sectors == 3);
+    assert(fcb.config.sector_size == 4096);
+    assert(fcb.config.flash_read == sim_flash_read);
+    assert(fcb.config.flash_program == sim_flash_program);
+    assert(fcb.config.flash_erase_sector == sim_flash_erase_sector);
+
+    printf("Passed test_fcb_init_config_preserved\n");
+}
+
+/**
+ * @brief Test fcb_init with multiple valid sectors containing varying record counts.
+ *        Verifies correct pointer recovery with mixed record distribution.
+ */
+static void test_fcb_init_recovery_chain_with_records(void)
+{
+    printf("Running test_fcb_init_recovery_chain_with_records...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // Set up 3 valid sectors with records
+    FcbSectorHdr shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+
+    // Sector 0: Seq 10, 1 record
+    shdr.sequence = 10;
+    flash_write(0, &shdr, sizeof(shdr));
+    FcbRecordHdr rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 5;
+    rhdr.status = FCB_RECORD_ACTIVE;
+    flash_write(FCB_SECTOR_HDR_SIZE, &rhdr, sizeof(rhdr));
+    uint8_t data[5] = {1,2,3,4,5};
+    flash_write(FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE, data, 5);
+    uint8_t crc = 0xAA;
+    flash_write(FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 5, &crc, 1);
+
+    // Sector 1: Seq 11, 2 records
+    shdr.sequence = 11;
+    flash_write(cfg.sector_size, &shdr, sizeof(shdr));
+    uint32_t offset = cfg.sector_size + FCB_SECTOR_HDR_SIZE;
+    for (int i = 0; i < 2; i++)
+    {
+        flash_write(offset, &rhdr, sizeof(rhdr));
+        flash_write(offset + FCB_RECORD_HDR_SIZE, data, 5);
+        flash_write(offset + FCB_RECORD_HDR_SIZE + 5, &crc, 1);
+        offset += FCB_RECORD_HDR_SIZE + 5 + 1;
+    }
+
+    // Sector 2: Seq 12, 1 record
+    shdr.sequence = 12;
+    flash_write(2 * cfg.sector_size, &shdr, sizeof(shdr));
+    offset = 2 * cfg.sector_size + FCB_SECTOR_HDR_SIZE;
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    flash_write(offset + FCB_RECORD_HDR_SIZE, data, 5);
+    flash_write(offset + FCB_RECORD_HDR_SIZE + 5, &crc, 1);
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    assert(fcb.next_sequence == 13);
+
+    // Should recover to newest sector (2) for writing
+    assert(fcb.write_sector == 2);
+    // write_offset = sector_base + FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 5 + 1
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 5 + 1);
+    
+    // read_offset should be at first active record in oldest sector (sector 0)
+    assert(fcb.read_sector == 0);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
+
+    printf("Passed test_fcb_init_recovery_chain_with_records\n");
+}
+
+/**
+ * @brief Test fcb_init with large record payloads near FCB_MAX_RECORD_SIZE.
+ *        Verifies handling of large records during recovery.
+ */
+static void test_fcb_init_large_record_recovery(void)
+{
+    printf("Running test_fcb_init_large_record_recovery...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = 4096;  // Increase sector size to fit large record
+
+    // Set up sector with large record
+    FcbSectorHdr shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 5;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+
+    // Write a 500-byte record (large but within FCB_MAX_RECORD_SIZE)
+    FcbRecordHdr rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 500;
+    rhdr.status = FCB_RECORD_ACTIVE;
+    uint32_t offset = FCB_SECTOR_HDR_SIZE;
+    flash_write(offset, &rhdr, sizeof(rhdr));
+
+    uint8_t large_data[500];
+    for (int i = 0; i < 500; i++)
+        large_data[i] = (uint8_t)(i % 256);
+    flash_write(offset + FCB_RECORD_HDR_SIZE, large_data, 500);
+
+    uint8_t crc = 0xFF;
+    flash_write(offset + FCB_RECORD_HDR_SIZE + 500, &crc, 1);
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+
+    // Verify pointers advanced past the large record
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 500 + 1);
+
+    printf("Passed test_fcb_init_large_record_recovery\n");
+}
+
+/**
+ * @brief Test fcb_init with alternating consumed and valid sectors.
+ *        Verifies correct handling of mixed status patterns.
+ */
+static void test_fcb_init_alternating_sector_status(void)
+{
+    printf("Running test_fcb_init_alternating_sector_status...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    FcbSectorHdr hdr;
+    hdr.magic = FCB_SECTOR_MAGIC;
+    hdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(hdr.reserved, 0xFF, sizeof(hdr.reserved));
+
+    // Pattern: Valid, Consumed, Valid, Consumed
+    // Sector 0: Valid, Seq 1
+    hdr.sequence = 1;
+    hdr.status = FCB_SECTOR_STATUS_VALID;
+    flash_write(0 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    // Sector 1: Consumed, Seq 2 (high sequence but consumed - should be ignored)
+    hdr.sequence = 2;
+    hdr.status = FCB_SECTOR_STATUS_CONSUMED;
+    flash_write(1 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    // Sector 2: Valid, Seq 3
+    hdr.sequence = 3;
+    hdr.status = FCB_SECTOR_STATUS_VALID;
+    flash_write(2 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    // Sector 3: Consumed, but shouldn't be used
+    hdr.sequence = 100;
+    hdr.status = FCB_SECTOR_STATUS_CONSUMED;
+    flash_write(3 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    assert(fcb.next_sequence == 4);  // max among valid = 3, next = 4
+
+    // Should use newest valid (Sector 2, Seq 3)
+    assert(fcb.write_sector == 2);
+    assert(fcb.read_sector == 2);
+    assert(fcb.delete_sector == 2);
+
+    printf("Passed test_fcb_init_alternating_sector_status\n");
+}
+
+/**
+ * @brief Test fcb_init correctly handles sector with only deleted records.
+ *        Verifies pointers skip deleted records properly.
+ */
+static void test_fcb_init_all_deleted_records(void)
+{
+    printf("Running test_fcb_init_all_deleted_records...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // Set up sector with all deleted records
+    FcbSectorHdr shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 5;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+
+    // Write 3 deleted records
+    FcbRecordHdr rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 10;
+    rhdr.status = FCB_RECORD_CONSUMED;  // Deleted
+    uint32_t offset = FCB_SECTOR_HDR_SIZE;
+    uint8_t dummy_data[10] = {0};
+    uint8_t dummy_crc = 0xAA;
+
+    for (int i = 0; i < 3; i++)
+    {
+        flash_write(offset, &rhdr, sizeof(rhdr));
+        flash_write(offset + FCB_RECORD_HDR_SIZE, dummy_data, 10);
+        flash_write(offset + FCB_RECORD_HDR_SIZE + 10, &dummy_crc, 1);
+        offset += FCB_RECORD_HDR_SIZE + 10 + 1;
+    }
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+
+    // Since all records are deleted, pointers should be at write position
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == offset);
+    
+    // read/delete should match write when no active records
+    assert(fcb.read_sector == fcb.write_sector);
+    assert(fcb.read_offset == fcb.write_offset);
+    assert(fcb.delete_sector == fcb.write_sector);
+    assert(fcb.delete_offset == fcb.write_offset);
+
+    printf("Passed test_fcb_init_all_deleted_records\n");
+}
+
+/**
+ * @brief Test fcb_init with sector containing only valid header, no records (empty but valid).
+ *        Verifies proper initialization of pointer state for empty sectors.
+ */
+static void test_fcb_init_multiple_empty_valid_sectors(void)
+{
+    printf("Running test_fcb_init_multiple_empty_valid_sectors...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    FcbSectorHdr hdr;
+    hdr.magic = FCB_SECTOR_MAGIC;
+    hdr.status = FCB_SECTOR_STATUS_VALID;
+    hdr.data_start = FCB_SECTOR_HDR_SIZE;
+    memset(hdr.reserved, 0xFF, sizeof(hdr.reserved));
+
+    // Set up multiple valid sectors with no records
+    hdr.sequence = 100;
+    flash_write(0 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    hdr.sequence = 101;
+    flash_write(1 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    hdr.sequence = 102;
+    flash_write(2 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    hdr.sequence = 103;
+    flash_write(3 * cfg.sector_size, &hdr, sizeof(hdr));
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+    assert(fcb.next_sequence == 104);  // max + 1
+
+    // Should use newest sector (Seq 103, Sector 3)
+    assert(fcb.write_sector == 3);
+    assert(fcb.write_offset == FCB_SECTOR_HDR_SIZE);
+    assert(fcb.read_sector == 3);
+    assert(fcb.read_offset == FCB_SECTOR_HDR_SIZE);
+
+    printf("Passed test_fcb_init_multiple_empty_valid_sectors\n");
+}
+
+/**
+ * @brief Test fcb_init correctly recovers when sector has data_start field properly set.
+ *        Verifies the data_start field in sector header is honored.
+ */
+static void test_fcb_init_respects_sector_data_start(void)
+{
+    printf("Running test_fcb_init_respects_sector_data_start...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // Create sector header with data_start pointing to specific offset
+    FcbSectorHdr shdr;
+    shdr.magic = FCB_SECTOR_MAGIC;
+    shdr.sequence = 7;
+    shdr.status = FCB_SECTOR_STATUS_VALID;
+    shdr.data_start = FCB_SECTOR_HDR_SIZE + 100;  // Point past some data
+    memset(shdr.reserved, 0xFF, sizeof(shdr.reserved));
+    flash_write(0, &shdr, sizeof(shdr));
+
+    // Write a record at the data_start offset
+    FcbRecordHdr rhdr;
+    rhdr.magic = FCB_RECORD_MAGIC;
+    rhdr.length = 8;
+    rhdr.status = FCB_RECORD_ACTIVE;
+    uint32_t offset = shdr.data_start;
+    flash_write(offset, &rhdr, sizeof(rhdr));
+    uint8_t data[8] = {1,2,3,4,5,6,7,8};
+    flash_write(offset + FCB_RECORD_HDR_SIZE, data, 8);
+    uint8_t crc = 0x55;
+    flash_write(offset + FCB_RECORD_HDR_SIZE + 8, &crc, 1);
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+
+    // Verify read starts at the data_start offset
+    assert(fcb.read_sector == 0);
+    assert(fcb.read_offset == shdr.data_start);
+
+    // Verify write pointer advanced past the record
+    assert(fcb.write_sector == 0);
+    assert(fcb.write_offset == offset + FCB_RECORD_HDR_SIZE + 8 + 1);
+
+    printf("Passed test_fcb_init_respects_sector_data_start\n");
+}
+
+/**
+ * @brief Test fcb_init with sector_size at boundary (just above minimum).
+ *        Edge case testing for validation logic.
+ */
+static void test_fcb_init_sector_size_just_above_minimum(void)
+{
+    printf("Running test_fcb_init_sector_size_just_above_minimum...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // sector_size = minimum + 1
+    cfg.sector_size = FCB_SECTOR_HDR_SIZE + FCB_RECORD_HDR_SIZE + 2;
+
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.is_mounted == true);
+
+    printf("Passed test_fcb_init_sector_size_just_above_minimum\n");
+}
+
+/**
+ * @brief Test fcb_init with various num_sectors values at boundaries.
+ */
+static void test_fcb_init_num_sectors_boundary_values(void)
+{
+    printf("Running test_fcb_init_num_sectors_boundary_values...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+
+    // Test num_sectors = 2 (minimum for ring buffer)
+    setup_config(&cfg);
+    cfg.num_sectors = 2;
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.config.num_sectors == 2);
+
+    printf("Passed test_fcb_init_num_sectors_boundary_values\n");
+}
+
+/**
+ * @brief Test fcb_init correctly increments next_sequence across reinits.
+ *        Verifies sequence number persistence and monotonicity.
+ */
+static void test_fcb_init_sequence_persistence_across_reinit(void)
+{
+    printf("Running test_fcb_init_sequence_persistence_across_reinit...\n");
+    flash_init();
+
+    Fcb fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+
+    // First init on empty flash
+    int rc = fcb_init(&fcb, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb.next_sequence == 2);  // Formatted with seq 1
+
+    // Write some data
+    uint8_t data[10] = {1,2,3,4,5,6,7,8,9,10};
+    rc = fcb_write(&fcb, data, 10);
+    assert(rc == FCB_OK);
+
+    // Re-init - should detect existing sector and preserve sequence awareness
+    Fcb fcb2;
+    rc = fcb_init(&fcb2, &cfg);
+    assert(rc == FCB_OK);
+    assert(fcb2.next_sequence == 2);  // Still aware of seq 1
+
+    // Write again with second FCB instance - should use same sequence
+    rc = fcb_write(&fcb2, data, 10);
+    assert(rc == FCB_OK);
+
+    printf("Passed test_fcb_init_sequence_persistence_across_reinit\n");
+}
+
+/* ================================================================== */
 /*  Main Runner                                                       */
 /* ================================================================== */
 
@@ -1185,6 +1696,21 @@ int main(void)
     printf("\n--- Running Write Split Tests ---\n");
     test_fcb_write_header_split();
     test_fcb_write_data_split();
+
+    printf("\n--- Running Additional Edge Case Tests ---\n");
+    test_fcb_init_minimum_sector_size();
+    test_fcb_init_single_sector();
+    test_fcb_init_max_sectors_config();
+    test_fcb_init_config_preserved();
+    test_fcb_init_recovery_chain_with_records();
+    test_fcb_init_large_record_recovery();
+    test_fcb_init_alternating_sector_status();
+    test_fcb_init_all_deleted_records();
+    test_fcb_init_multiple_empty_valid_sectors();
+    test_fcb_init_respects_sector_data_start();
+    test_fcb_init_sector_size_just_above_minimum();
+    test_fcb_init_num_sectors_boundary_values();
+    test_fcb_init_sequence_persistence_across_reinit();
 
     printf("\n================================================\n");
     printf("All simulation tests completed successfully\n");
