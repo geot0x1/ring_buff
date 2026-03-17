@@ -26,6 +26,9 @@ extern "C" {
 /** Magic value written into every valid record header (1 byte). */
 #define FCB_RECORD_MAGIC    0xBAU
 
+/** Internal magic value set after successful FCB initialization. */
+#define FCB_INIT_MAGIC      0xFCB0FCB0U
+
 /** Maximum number of sectors the FCB can manage. */
 #define FCB_MAX_SECTORS     64U
 

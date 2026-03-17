@@ -727,7 +727,7 @@ int fcb_init(Fcb *fcb, const FcbConfig *cfg)
 
     fcb->next_sequence = max_seq + 1;
     
-    int rc = fcb_recover_pointers(fcb, oldest_sector, newest_sector);
+    rc = fcb_recover_pointers(fcb, oldest_sector, newest_sector);
     if (rc != FCB_OK)
     {
         return rc;
