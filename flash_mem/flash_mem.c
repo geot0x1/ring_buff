@@ -4,26 +4,32 @@
 
 static uint8_t fcb_flash[FLASH_SIZE];
 
-void flash_init(void) {
+void flash_init(void)
+{
   // Initialize the flash to its erased state
   memset(fcb_flash, 0xFF, FLASH_SIZE);
 }
 
-int flash_write(uint32_t addr, const void *data, uint32_t len) {
-  if (addr + len > FLASH_SIZE) {
+int flash_write(uint32_t addr, const void *data, uint32_t len)
+{
+  if (addr + len > FLASH_SIZE)
+  {
     return -1; // Out of bounds
   }
 
   const uint8_t *p_data = (const uint8_t *)data;
-  for (uint16_t i = 0; i < len; i++) {
+  for (uint16_t i = 0; i < len; i++)
+  {
     // NOR flash can only pull bits down to 0.
     fcb_flash[addr + i] &= p_data[i];
   }
   return 0; // Success
 }
 
-int flash_read(uint32_t addr, void *data, uint32_t size) {
-  if (addr + size > FLASH_SIZE) {
+int flash_read(uint32_t addr, void *data, uint32_t size)
+{
+  if (addr + size > FLASH_SIZE)
+  {
     return -1; // Out of bounds
   }
   memcpy(data, &fcb_flash[addr], size);
