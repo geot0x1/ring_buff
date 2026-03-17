@@ -61,6 +61,11 @@ void flash_full_erase(void);
  */
 void flash_print_sector(uint32_t addr, uint32_t num_bytes);
 
+/**
+ * @brief De-initialize the flash memory simulator.
+ */
+void flash_deinit(void);
+
 #ifdef __cplusplus
 }
 #endif
