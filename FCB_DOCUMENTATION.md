@@ -86,7 +86,7 @@ The `fcb_t` structure maintains the runtime state:
 ### 3.1 Mounting and Recovery (`fcb_init`)
 Upon initialization, the FCB performs a full recovery scan:
 
-1.  **Scan Sector Headers:** Finds all valid FCB sectors and identifies the oldest/newest based on sequence numbers.
+1.  **Scan Sector Headers:** Finds all valid FCB sectors (those with correct magic number and status != 0x00) and identifies the oldest/newest based on sequence numbers. Sequence numbers are uint32_t values that can wrap around from 0xFFFFFFFF to 0x00000000. To determine logical order, the FCB uses signed distance math: `(int32_t)(seq_a - seq_b) > 0` indicates seq_a is more recent than seq_b, correctly handling wrap-around.
 2.  **Sequential Walk:** Starting from the oldest sector, the recovery process scans records sequentially from the beginning of the sector (after the Sector Header).
 3.  **Validate Records:** For each record, it reads the 4-byte header. If valid, it skips the `length` bytes of data to find and verify the CRC-8 byte.
 4.  **Find read_ptr:** Finds the first record with a `status` != `0x00` (unread).

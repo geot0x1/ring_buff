@@ -427,6 +427,23 @@ static int write_record_header(Fcb *fcb, uint32_t sector_num, uint32_t offset, u
 
 /**
  * @brief Scan all sectors to find the oldest and newest valid headers.
+ *
+ * This function performs a single pass over all sectors to identify valid sectors
+ * (those with correct magic number and status != FCB_SECTOR_STATUS_CONSUMED).
+ * It determines the logical oldest and newest sectors based on sequence numbers,
+ * handling wrap-around using signed distance math: (int32_t)(seq_a - seq_b) > 0
+ * indicates seq_a is more recent than seq_b.
+ *
+ * @param fcb         Pointer to FCB instance.
+ * @param oldest_out  Output pointer for oldest sector index (-1 if none found).
+ * @param newest_out  Output pointer for newest sector index (-1 if none found).
+ * @param max_seq_out Output pointer for newest sequence number (0 if none found).
+ * @return Number of valid sectors found (0 if none).
+ *
+ * Edge cases:
+ * - Zero valid sectors: returns 0, sets outputs to -1/0 safely.
+ * - One valid sector: returns 1, sets both oldest and newest to that sector.
+ * - Multiple valid sectors: finds logical oldest/newest considering wrap-around.
  */
 static int fcb_find_oldest_newest(Fcb *fcb, int *oldest_out, int *newest_out, uint32_t *max_seq_out)
 {
