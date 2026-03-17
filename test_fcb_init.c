@@ -64,6 +64,8 @@ void test_fcb_get_next_valid_record_image(void)
     offset += FCB_RECORD_HDR_SIZE + hdr.length + 1;
     rc = fcb_get_next_valid_record(&fcb, &sector, &offset, &hdr);
     TEST_ASSERT_EQUAL_INT(FCB_EMPTY, rc); 
+
+    flash_deinit();
 }
 
 /* ================================================================== */
