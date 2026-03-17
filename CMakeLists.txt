@@ -26,7 +26,10 @@ add_subdirectory(flash_ops)
 enable_testing()
 
 # ── Test executable ────────────────────────────────────────────────────────────
-add_executable(test_fcb main.c test_fcb_init.c)
+add_executable(test_fcb main.c
+    test_fcb_init.c
+    test_fcb_rw.c
+)
 
 target_include_directories(test_fcb PRIVATE
     ${unity_SOURCE_DIR}/src
