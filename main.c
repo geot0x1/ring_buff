@@ -14,7 +14,6 @@
 void setUp(void)
 {
     /* Code run before each test */
-    flash_init("flash.bin");
 }
 
 void tearDown(void)

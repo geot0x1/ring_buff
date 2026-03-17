@@ -27,6 +27,7 @@ void flash_init(const char *filename)
         FILE *file = fopen(g_flash_filename, "rb");
         if (file == NULL)
         {
+            printf("Flash file does not exist. Creating it...\n");
             // File doesn't exist, create it but do not format/modify contents
             file = fopen(g_flash_filename, "wb");
             if (file != NULL)
