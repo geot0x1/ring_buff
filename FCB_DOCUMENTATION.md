@@ -27,7 +27,7 @@ Located at the beginning of every sector.
 | 0 | 4 | `magic` | `0x0FCBF1F0` ensures the sector is a valid FCB sector. |
 | 4 | 4 | `sequence` | Monotonically increasing number used to determine logical order. |
 | 8 | 2 | `data_start` | Offset from sector start to the first NEW record header. |
-| 10 | 1 | `status` | `0xFF` (erased/valid) or `0x00` (consumed). |
+| 10 | 1 | `status` | Valid (valid != `0x00`) or `0x00` (consumed). |
 | 11 | 5 | `reserved` | Future use. |
 
 #### Record Header (4 bytes)
@@ -51,7 +51,7 @@ Flash Start Address
 |
 v
 +-----------------------+ <--- Sector 0 Start
-| Sector Header (16B)   |   (Status = 0xFF = Valid)
+| Sector Header (16B)   |   (Status != 0x00 = Valid)
 +-----------------------+
 | Record 1 Header (4B) |
 +-----------------------+
@@ -89,7 +89,7 @@ Upon initialization, the FCB performs a full recovery scan:
 1.  **Scan Sector Headers:** Finds all valid FCB sectors and identifies the oldest/newest based on sequence numbers.
 2.  **Sequential Walk:** Starting from the oldest sector, the recovery process scans records sequentially from the beginning of the sector (after the Sector Header).
 3.  **Validate Records:** For each record, it reads the 4-byte header. If valid, it skips the `length` bytes of data to find and verify the CRC-8 byte.
-4.  **Find read_ptr:** Finds the first record with a `status` of `0xFF` (unread).
+4.  **Find read_ptr:** Finds the first record with a `status` != `0x00` (unread).
 5.  **Find write_ptr:** Positions the write pointer at the first available byte after the last valid record in the newest sector.
 
 ### 3.2 Appending Records (`fcb_write`)
@@ -132,11 +132,11 @@ Upon initialization, the FCB performs a full recovery scan:
 ### Sector Status Lifecycle
 The sector status field transitions through states following NOR flash's one-way bit clearing property:
 ```text
-0xFF (Erased/Valid) 
+ != 0x00 (Erased/Valid) 
   ↓ [mark all records consumed]
 0x00 (Consumed) 
   ↓ [erase sector]
-0xFF (Erased/Valid)
+ != 0x00 (Erased/Valid)
 ```
 
 The consumed status (`0x00`) is marked before erasure as an optimization flag and recovery aid, allowing the system to quickly identify sectors that contain only fully-consumed data.

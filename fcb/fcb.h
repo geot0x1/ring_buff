@@ -57,7 +57,7 @@ extern "C" {
  *   0       4     magic       (0x0FCBF1F0)
  *   4       4     sequence    (monotonic, increases forever)
  *   8       2     data_start  (offset to first new record)
- *   10      1     status      (0xFF = erased, 0x00 = consumed)
+ *   10      1     status      (erased/valid != 0x00, 0x00 = consumed)
  *   11      5     reserved
  */
 #pragma pack(push, 1)
@@ -66,7 +66,7 @@ typedef struct
     uint32_t magic;      /**< 0x0FCBF1F0                                                */
     uint32_t sequence;   /**< Monotonically increasing ID                              */
     uint16_t data_start; /**< Offset from sector start to the first NEW record header */
-    uint8_t  status;     /**< 0xFF: Valid, 0x00: Consumed                              */
+    uint8_t  status;     /**< Valid (valid != 0x00), 0x00: Consumed                   */
     uint8_t  reserved[5];/**< Padding to 16 bytes                                      */
 } FcbSectorHdr;
 #pragma pack(pop)
