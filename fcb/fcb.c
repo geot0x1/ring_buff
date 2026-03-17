@@ -430,10 +430,10 @@ static int write_record_header(Fcb *fcb, uint32_t sector_num, uint32_t offset, u
  */
 static int fcb_find_oldest_newest(Fcb *fcb, int *oldest_out, int *newest_out, uint32_t *max_seq_out)
 {
-    uint32_t max_seq = 0;
-    uint32_t min_seq = 0xFFFFFFFF;
-    int newest_sector = -1;
     int oldest_sector = -1;
+    int newest_sector = -1;
+    uint32_t oldest_seq = 0;
+    uint32_t newest_seq = 0;
     uint32_t valid_sector_count = 0;
 
     for (uint32_t i = 0; i < fcb->config.num_sectors; i++)
@@ -441,18 +441,30 @@ static int fcb_find_oldest_newest(Fcb *fcb, int *oldest_out, int *newest_out, ui
         FcbSectorHdr hdr;
         if (read_sector_header(fcb, i, &hdr) == FCB_OK)
         {
-            if (hdr.magic == FCB_SECTOR_MAGIC)
+            if (hdr.magic == FCB_SECTOR_MAGIC && hdr.status != FCB_SECTOR_STATUS_CONSUMED)
             {
                 valid_sector_count++;
-                if (hdr.sequence > max_seq)
+                if (oldest_sector == -1)
                 {
-                    max_seq = hdr.sequence;
-                    newest_sector = (int)i;
-                }
-                if (hdr.sequence < min_seq)
-                {
-                    min_seq = hdr.sequence;
+                    /* First valid sector found */
                     oldest_sector = (int)i;
+                    newest_sector = (int)i;
+                    oldest_seq = hdr.sequence;
+                    newest_seq = hdr.sequence;
+                }
+                else
+                {
+                    /* Compare sequences using signed distance for wrap-around */
+                    if ((int32_t)(hdr.sequence - oldest_seq) < 0)
+                    {
+                        oldest_sector = (int)i;
+                        oldest_seq = hdr.sequence;
+                    }
+                    if ((int32_t)(hdr.sequence - newest_seq) > 0)
+                    {
+                        newest_sector = (int)i;
+                        newest_seq = hdr.sequence;
+                    }
                 }
             }
         }
@@ -468,7 +480,7 @@ static int fcb_find_oldest_newest(Fcb *fcb, int *oldest_out, int *newest_out, ui
     }
     if (max_seq_out)
     {
-        *max_seq_out = max_seq;
+        *max_seq_out = (valid_sector_count > 0) ? newest_seq : 0;
     }
 
     return (int)valid_sector_count;
