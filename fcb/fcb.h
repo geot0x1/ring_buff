@@ -24,7 +24,7 @@ extern "C" {
 #define FCB_SECTOR_MAGIC    0x0FCBF1F0U
 
 /** Magic value written into every valid record header (1 byte). */
-#define FCB_RECORD_MAGIC    0xBAU
+#define FCB_RECORD_MAGIC    0x5AU
 
 /** Internal magic value set after successful FCB initialization. */
 #define FCB_INIT_MAGIC      0xFCB0FCB0U
@@ -127,10 +127,10 @@ typedef struct
     int (*flash_read)(void *ctx, uint32_t addr, uint8_t *buf, size_t len);
 
     /** Program up to 256 bytes at `addr`.  Return 0 on success.              */
-    int (*flash_program)(void *ctx, uint32_t addr, const uint8_t *data, size_t len);
+    int (*flash_write)(void *ctx, uint32_t addr, const uint8_t *data, size_t len);
 
     /** Erase the sector that contains `addr`.  Return 0 on success.          */
-    int (*flash_erase_sector)(void *ctx, uint32_t addr);
+    int (*flash_erase)(void *ctx, uint32_t addr);
 
     /** Acquire the mutex.  May be NULL if thread-safety is not needed.       */
     void (*lock)(void *mutex_ctx);
@@ -182,6 +182,14 @@ typedef struct
 /* ------------------------------------------------------------------ */
 
 /**
+ * @brief Calculate the signed distance between two sequence numbers.
+ *
+ * Accounts for 32-bit wrap-around.
+ * Positive result means `a` is newer than `b`.
+ */
+int32_t fcb_seq_diff(uint32_t a, uint32_t b);
+
+/**
  * @brief Mount the FCB and perform full recovery scan.
  *
  * Scans every sector header, rebuilds internal state, and positions
@@ -231,10 +239,14 @@ int fcb_read(Fcb *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
 int fcb_delete(Fcb *fcb);
 
 /**
- * @brief Erase the oldest sector, but ONLY if all its records are consumed.
+ * @brief Erase the oldest sector to free up space.
+ *
+ * Always erases the oldest sector, regardless of consumption state.
+ * Automatically advances delete_ptr and read_ptr if they point into the erased sector.
+ * Caller is responsible for processing records before trim if needed.
  *
  * @param fcb  Initialised FCB instance.
- * @return FCB_OK, FCB_NOT_CONSUMED, FCB_EMPTY, or FCB_ERR_FLASH.
+ * @return FCB_OK on success, or FCB_ERR_FLASH if erase operation fails.
  */
 int fcb_trim(Fcb *fcb);
 
