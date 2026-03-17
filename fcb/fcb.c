@@ -623,6 +623,12 @@ static int fcb_recover_pointers_chain(Fcb *fcb, int oldest_sector, int newest_se
                 break; 
             }
 
+            /* Validate record length to prevent overflow from corrupted data */
+            if (rec_hdr.length > FCB_MAX_RECORD_SIZE)
+            {
+                break; 
+            }
+
             uint32_t total_record_len = FCB_RECORD_HDR_SIZE + rec_hdr.length + 1; 
             uint32_t avail_in_sector = fcb->config.sector_size - offset;
 
