@@ -684,9 +684,18 @@ static int fcb_recover_pointers_single(Fcb *fcb, int sector)
     {
         FcbRecordHdr rec_hdr;
         int rc = read_record_header(fcb, (uint32_t)sector, offset, &rec_hdr);
-        if (rc != FCB_OK || rec_hdr.magic != FCB_RECORD_MAGIC)
+        
+        bool isValid = (rc == FCB_OK && rec_hdr.magic == FCB_RECORD_MAGIC && 
+                        fcb_verify_record_at(fcb, (uint32_t)sector, offset, &rec_hdr) == FCB_OK);
+
+        if (!isValid)
         {
-            break; 
+            uint32_t temp_s = (uint32_t)sector;
+            int scavenge_rc = fcb_get_next_valid_record(fcb, &temp_s, &offset, &rec_hdr);
+            if (scavenge_rc != FCB_OK)
+            {
+                break; 
+            }
         }
 
         uint32_t total_record_len = FCB_RECORD_HDR_SIZE + rec_hdr.length + 1; 
@@ -757,15 +766,17 @@ static int fcb_recover_pointers_chain(Fcb *fcb, int oldest_sector, int newest_se
         {
             FcbRecordHdr rec_hdr;
             int rc = read_record_header(fcb, curr_sector, offset, &rec_hdr);
-            if (rc != FCB_OK || rec_hdr.magic != FCB_RECORD_MAGIC)
-            {
-                break; 
-            }
+            
+            bool isValid = (rc == FCB_OK && rec_hdr.magic == FCB_RECORD_MAGIC && 
+                            fcb_verify_record_at(fcb, curr_sector, offset, &rec_hdr) == FCB_OK);
 
-            /* Validate record length to prevent overflow from corrupted data */
-            if (rec_hdr.length > FCB_MAX_RECORD_SIZE)
+            if (!isValid)
             {
-                break; 
+                int scavenge_rc = fcb_get_next_valid_record(fcb, &curr_sector, &offset, &rec_hdr);
+                if (scavenge_rc != FCB_OK)
+                {
+                    break; 
+                }
             }
 
             uint32_t total_record_len = FCB_RECORD_HDR_SIZE + rec_hdr.length + 1; 
@@ -799,7 +810,7 @@ static int fcb_recover_pointers_chain(Fcb *fcb, int oldest_sector, int newest_se
             fcb->write_sector = last_valid_sector;
             if (overflow > 0)
             {
-                fcb->write_sector = (curr_sector + 1) % fcb->config.num_sectors;
+                fcb->write_sector = curr_sector;
                 fcb->write_offset = FCB_SECTOR_HDR_SIZE + overflow;
             }
             else

@@ -122,9 +122,22 @@ def gen_corrupted_scavenge():
 def gen_spanning_record():
     flash = bytearray([0xFF] * FLASH_SIZE)
     flash[0:16] = create_sector_header(sequence=1)
-    flash[SECTOR_SIZE:SECTOR_SIZE+16] = create_sector_header(sequence=2, data_start=25)
 
-    s0_end = SECTOR_SIZE - 4
+    # Add filler records to tightly pack from offset 16 up to 65532
+    offset = 16
+    r_full = create_record(b"Filler Record")
+    while offset + len(r_full) < 65532 - 18:
+        flash[offset:offset+len(r_full)] = r_full
+        offset += len(r_full)
+
+    remaining = 65532 - offset
+    payload_len = remaining - 5
+    if payload_len > 0:
+        last_filler = create_record(b"A" * payload_len)
+        flash[offset:offset+len(last_filler)] = last_filler
+        offset += len(last_filler)
+
+    s0_end = 65532
     spanning_data = b"Spanning Record Content Starts S0 Ends S1"
     length = len(spanning_data)
     header = struct.pack("<B H B", FCB_RECORD_MAGIC, length, 0xFF)
@@ -133,6 +146,10 @@ def gen_spanning_record():
     flash[SECTOR_SIZE+16:SECTOR_SIZE+16+length] = spanning_data
     crc = calc_crc8(spanning_data)
     flash[SECTOR_SIZE+16+length] = crc
+
+    # total overflowed size = length + 1 (for CRC) = 42
+    data_start = 16 + length + 1 # 58
+    flash[SECTOR_SIZE:SECTOR_SIZE+16] = create_sector_header(sequence=2, data_start=data_start)
 
     save_image(flash, "spanning_record.bin")
 
