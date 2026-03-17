@@ -8,21 +8,30 @@
 extern "C" {
 #endif
 
-#define FLASH_SECTOR_SIZE (64 * 1024)
-#define FLASH_SECTOR_COUNT 64
-#define FLASH_SIZE (FLASH_SECTOR_SIZE * FLASH_SECTOR_COUNT)
+/* Memory Map Configuration */
+#define FLASH_SECTOR_SIZE  (64 * 1024)
+#define FLASH_SECTOR_COUNT (4)
+#define FLASH_SIZE         (FLASH_SECTOR_SIZE * FLASH_SECTOR_COUNT)
 
 /**
- * @brief Initialize the flash memory simulator (sets all bytes to 0xFF).
+ * @brief Initialize the flash memory simulator using a backing file.
+ * * @param filename Path to the binary file simulating the flash hardware.
  */
-void flash_init(void);
+void flash_init(const char *filename);
 
 /**
- * @brief Write data to flash.
+ * @brief Safely closes the flash simulation file.
+ */
+void flash_close(void);
+
+/**
+ * @brief Write data to flash. 
+ * Note: Simulates NOR logic where bits can only transition 1 -> 0.
  *
  * @param addr Destination address in flash.
  * @param data Source data buffer.
- * @param len Number of bytes to write.
+ * @param len  Number of bytes to write.
+ * @return 0 on success, -1 on failure (e.g., out of bounds).
  */
 int flash_write(uint32_t addr, const void *data, uint32_t len);
 
@@ -32,26 +41,28 @@ int flash_write(uint32_t addr, const void *data, uint32_t len);
  * @param addr Source address in flash.
  * @param data Destination buffer.
  * @param size Number of bytes to read.
+ * @return 0 on success, -1 on failure.
  */
 int flash_read(uint32_t addr, void *data, uint32_t size);
 
 /**
- * @brief Erase a flash sector (64KB).
+ * @brief Erase a flash sector (sets all bytes in sector to 0xFF).
  *
- * @param base_addr Base address of the sector to erase.
+ * @param addr Any address within the target sector.
+ * @return 0 on success, -1 on failure.
  */
-int flash_erase_sector(uint32_t base_addr);
+int flash_erase_sector(uint32_t addr);
 
 /**
- * @brief Erase the entire flash memory.
+ * @brief Erase the entire flash memory (Chip Erase).
  */
 void flash_full_erase(void);
 
 /**
  * @brief Print sector contents for debugging.
  *
- * @param addr Any address within the sector to print.
- * @param num_bytes Number of bytes to print.
+ * @param addr      Any address within the sector to print.
+ * @param num_bytes Number of bytes to print starting from sector base.
  */
 void flash_print_sector(uint32_t addr, uint32_t num_bytes);
 
