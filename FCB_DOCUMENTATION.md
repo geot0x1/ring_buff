@@ -7,7 +7,7 @@ The Flash Circular Buffer (FCB) is a robust, power-fail-safe, circular FIFO impl
 ### 1.1 Power-Fail Safety
 The FCB is designed to ensure that the buffer state remains recoverable at any point, even if power is lost during a write or erase operation.
 *   **Sequential Writes:** Record data is written sequentially (Header → Data → CRC8). Sector headers are written at the beginning of the sector to maintain structure.
-*   **State Transitions:** Sector status transitions from erased/valid (`0xFF`) to consumed (`0x00`) only clearing bits, exploiting NOR flash's write-once property.
+*   **State Transitions:** Sector status transitions from erased/valid (`0xFF`) to consumed (`0x00`) by only clearing bits, exploiting NOR flash's write-once property.
 *   **Atomic Operations:** The status flag in record headers transitions from `0xFF` to `0x00`, which is an atomic operation on NOR flash.
 *   **CRC-8 Validation:** A CRC-8 checksum is appended after the record data and validates the data payload integrity.
 
