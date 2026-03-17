@@ -23,23 +23,48 @@ void flash_init(const char *filename)
             strncpy(g_flash_filename, filename, sizeof(g_flash_filename) - 1);
         }
 
+        // Try to open to see if it exists
         FILE *file = fopen(g_flash_filename, "rb");
         if (file == NULL)
         {
-            // File doesn't exist, create and format it
+            // File doesn't exist, create it but do not format/modify contents
             file = fopen(g_flash_filename, "wb");
             if (file != NULL)
             {
-                uint8_t erase_val = 0xFF;
-                for (uint32_t i = 0; i < FLASH_SIZE; i++)
-                {
-                    fwrite(&erase_val, 1, 1, file);
-                }
+                // Set the file size to FLASH_SIZE without writing data
+                fseek(file, FLASH_SIZE - 1, SEEK_SET);
+                uint8_t dummy = 0;
+                fwrite(&dummy, 1, 1, file);
                 fclose(file);
             }
         }
         else
         {
+            fclose(file);
+        }
+    }
+    LeaveCriticalSection(&g_flash_lock);
+}
+
+void flash_full_erase(void)
+{
+    EnterCriticalSection(&g_flash_lock);
+    {
+        FILE *file = fopen(g_flash_filename, "rb+");
+        if (file == NULL)
+        {
+            // If erase is called but file is missing, create it as erased
+            file = fopen(g_flash_filename, "wb");
+        }
+
+        if (file != NULL)
+        {
+            uint8_t erase_val = 0xFF;
+            fseek(file, 0, SEEK_SET);
+            for (uint32_t i = 0; i < FLASH_SIZE; i++)
+            {
+                fwrite(&erase_val, 1, 1, file);
+            }
             fclose(file);
         }
     }
@@ -141,24 +166,6 @@ int flash_erase_sector(uint32_t addr)
     LeaveCriticalSection(&g_flash_lock);
     
     return result;
-}
-
-void flash_full_erase(void)
-{
-    EnterCriticalSection(&g_flash_lock);
-    {
-        FILE *file = fopen(g_flash_filename, "wb");
-        if (file != NULL)
-        {
-            uint8_t erase_val = 0xFF;
-            for (uint32_t i = 0; i < FLASH_SIZE; i++)
-            {
-                fwrite(&erase_val, 1, 1, file);
-            }
-            fclose(file);
-        }
-    }
-    LeaveCriticalSection(&g_flash_lock);
 }
 
 void flash_print_sector(uint32_t addr, uint32_t num_bytes)
