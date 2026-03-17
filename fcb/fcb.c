@@ -441,23 +441,13 @@ int fcb_get_next_valid_record(Fcb *fcb, uint32_t *sector, uint32_t *offset, FcbR
     uint32_t scan_count = 0;
     const uint32_t SCAN_LIMIT = 2048;
 
-    while (scan_count < SCAN_LIMIT)
+    while (curr_o + FCB_RECORD_HDR_SIZE <= fcb->config.sector_size && scan_count < SCAN_LIMIT)
     {
-        // 1. Check for sector wrap-around
-        if (curr_o + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
-        {
-            curr_s = (curr_s + 1) % fcb->config.num_sectors;
-            curr_o = FCB_SECTOR_HDR_SIZE; // Jump to data area of next sector
-        }
-
         uint8_t potential_magic = 0;
         if (fcb_flash_read(fcb, fcb->config.start_addr + (curr_s * fcb->config.sector_size) + curr_o, 
                            &potential_magic, 1) != 0) return FCB_ERR_FLASH;
 
-        // 2. Detect Erased Flash (EndOfData)
-        if (potential_magic == 0xFF) return FCB_EMPTY;
-
-        // 3. Match Magic Byte (0x5A)
+        // 1. Match Magic Byte (0x5A)
         if (potential_magic == FCB_RECORD_MAGIC)
         {
             FcbRecordHdr temp_hdr;
@@ -470,8 +460,6 @@ int fcb_get_next_valid_record(Fcb *fcb, uint32_t *sector, uint32_t *offset, FcbR
                     uint8_t record_data[FCB_MAX_RECORD_SIZE];
                     size_t read_len = 0;
                     
-                    // Note: We use a 'dry read' or manual CRC check here
-                    // If CRC is valid, we found it!
                     if (fcb_verify_record_at(fcb, curr_s, curr_o, &temp_hdr) == FCB_OK)
                     {
                         *sector = curr_s;
@@ -483,9 +471,14 @@ int fcb_get_next_valid_record(Fcb *fcb, uint32_t *sector, uint32_t *offset, FcbR
             }
         }
 
-        // 4. Scavenge: Byte-by-byte movement
+        // 2. Scavenge: Byte-by-byte movement
         curr_o++;
         scan_count++;
+    }
+
+    if (curr_o + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
+    {
+        return FCB_EMPTY;
     }
 
     return FCB_CORRUPTED;

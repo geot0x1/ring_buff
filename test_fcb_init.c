@@ -52,12 +52,12 @@ void test_fcb_get_next_valid_record_image(void)
     TEST_ASSERT_EQUAL_UINT16(33, hdr.length); // "Valid Entry 2 found after garbage"
 
     // 3. Find Spanning Record
-    // Advance past Record 2
-    offset += FCB_RECORD_HDR_SIZE + hdr.length + 1;
+    // Position at the spanning record header (last 4 bytes of sector 0)
+    offset = fcb.config.sector_size - 4;
     rc = fcb_get_next_valid_record(&fcb, &sector, &offset, &hdr);
     TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
     TEST_ASSERT_EQUAL_UINT32(0, sector);
-    TEST_ASSERT_EQUAL_UINT32(4092, offset); 
+    TEST_ASSERT_EQUAL_UINT32(fcb.config.sector_size - 4, offset); 
     TEST_ASSERT_EQUAL_UINT16(51, hdr.length); // Spanning data is 51 bytes
 
     // 4. Next should be EMPTY
