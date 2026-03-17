@@ -20,11 +20,6 @@ extern "C" {
 void flash_init(const char *filename);
 
 /**
- * @brief Safely closes the flash simulation file.
- */
-void flash_close(void);
-
-/**
  * @brief Write data to flash. 
  * Note: Simulates NOR logic where bits can only transition 1 -> 0.
  *
