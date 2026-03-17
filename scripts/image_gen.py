@@ -1,7 +1,7 @@
 import struct
 
 # Constants from fcb.h
-SECTOR_SIZE = 4096  # Example size
+SECTOR_SIZE = 65536  # Example size
 NUM_SECTORS = 4
 FLASH_SIZE = SECTOR_SIZE * NUM_SECTORS
 
