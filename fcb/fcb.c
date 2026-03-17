@@ -727,11 +727,16 @@ int fcb_init(Fcb *fcb, const FcbConfig *cfg)
 
     fcb->next_sequence = max_seq + 1;
     
-    //! TODO: that should be set after successful recovery
+    int rc = fcb_recover_pointers(fcb, oldest_sector, newest_sector);
+    if (rc != FCB_OK)
+    {
+        return rc;
+    }
+
     fcb->magic = FCB_INIT_MAGIC;
     fcb->is_mounted = true;
 
-    return fcb_recover_pointers(fcb, oldest_sector, newest_sector);
+    return FCB_OK;
 }
 
 static int fcb_write_nolock(Fcb *fcb, const uint8_t *data, size_t len)
