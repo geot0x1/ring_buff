@@ -1958,27 +1958,67 @@ int main(void)
     printf("FCB Init Simulation Tests\n");
     printf("================================================\n");
 
+    printf("\n--- Running fcb_init Argument Validation Tests ---\n");
     test_fcb_init_invalid_args();
     test_fcb_init_invalid_config();
-    test_fcb_init_corrupt_flash();
+
+    printf("\n--- Running fcb_init Basic Scenarios ---\n");
     test_fcb_init_empty_flash();
+    test_fcb_init_corrupt_flash();
+
+    printf("\n--- Running fcb_init Sequence Discovery Tests ---\n");
     test_fcb_init_sequence_order();
     test_fcb_init_with_records();
+
+    printf("\n--- Running fcb_init Single Sector Recovery Tests ---\n");
     test_fcb_init_recover_single_sector_full();
     test_fcb_init_recover_single_sector_mixed();
+
+    printf("\n--- Running fcb_init Multi-Sector Recovery Tests ---\n");
     test_fcb_init_recover_chain_no_active();
     test_fcb_init_recover_with_consumed_sector();
     test_fcb_init_recover_with_corrupt_record();
+    test_fcb_init_recovery_chain_with_records();
+    test_fcb_init_recover_spanning_record();
+
+    printf("\n--- Running fcb_init Sector Status Tests ---\n");
     test_fcb_init_zero_valid_sectors();
     test_fcb_init_one_valid_sector();
-    test_fcb_init_sequence_wrap_around();
     test_fcb_init_mixed_valid_consumed();
+    test_fcb_init_alternating_sector_status();
+    test_fcb_init_all_deleted_records();
+    test_fcb_init_multiple_empty_valid_sectors();
 
-    printf("\n--- Running Magic Initialization Fix Tests ---\n");
+    printf("\n--- Running fcb_init Sequence Handling Tests ---\n");
+    test_fcb_init_sequence_wrap_around();
+    test_fcb_init_sequence_persistence_across_reinit();
+
+    printf("\n--- Running fcb_init Magic Initialization Tests ---\n");
     test_fcb_init_magic_set_on_recovery_success();
     test_fcb_init_magic_set_on_chain_recovery_success();
     test_fcb_init_magic_not_set_on_recovery_failure();
     test_fcb_init_magic_set_on_format_initial();
+
+    printf("\n--- Running fcb_init Configuration Tests ---\n");
+    test_fcb_init_minimum_sector_size();
+    test_fcb_init_sector_size_just_above_minimum();
+    test_fcb_init_single_sector();
+    test_fcb_init_max_sectors_config();
+    test_fcb_init_num_sectors_boundary_values();
+    test_fcb_init_config_preserved();
+
+    printf("\n--- Running fcb_init Data Handling Tests ---\n");
+    test_fcb_init_large_record_recovery();
+    test_fcb_init_respects_sector_data_start();
+
+    printf("\n--- Running fcb_init High-Risk Scenario Tests ---\n");
+    test_fcb_init_all_sectors_bad_magic();
+    test_fcb_init_half_erased_sector();
+
+    printf("\n--- Running fcb_init Flash I/O Error Tests ---\n");
+    test_fcb_init_flash_read_error();
+    test_fcb_init_flash_erase_error();
+    test_fcb_init_flash_program_error();
 
     printf("\n--- Running Lifecycle Tests ---\n");
     test_fcb_cycle_write_no_read_reinit();
@@ -1989,25 +2029,6 @@ int main(void)
     printf("\n--- Running Write Split Tests ---\n");
     test_fcb_write_header_split();
     test_fcb_write_data_split();
-
-    printf("\n--- Running Additional Edge Case Tests ---\n");
-    test_fcb_init_minimum_sector_size();
-    test_fcb_init_single_sector();
-    test_fcb_init_large_record_recovery();
-    test_fcb_init_config_preserved();
-    test_fcb_init_recovery_chain_with_records();
-    test_fcb_init_num_sectors_boundary_values();
-    test_fcb_init_sequence_persistence_across_reinit();
-
-    printf("\n--- Running High-Risk Scenario Tests (Power-Loss & Flash Errors) ---\n");
-    test_fcb_init_all_sectors_bad_magic();
-    test_fcb_init_half_erased_sector();
-    test_fcb_init_recover_spanning_record();
-
-    printf("\n--- Running Flash I/O Error Tests ---\n");
-    test_fcb_init_flash_read_error();
-    test_fcb_init_flash_erase_error();
-    test_fcb_init_flash_program_error();
 
     printf("\n================================================\n");
     printf("ALL TESTS PASSED\n");
