@@ -350,6 +350,147 @@ static int erase_sector(Fcb *fcb, uint32_t sector_num)
 /*  Internal Helpers Implementation                                    */
 /* ================================================================== */
 
+/**
+ * @brief Verifies the integrity of a record at a specific location without moving pointers.
+ * * @param fcb    Initialised FCB instance.
+ * @param sector Sector index to check.
+ * @param offset Offset within the sector where the FcbRecordHdr starts.
+ * @param hdr    Pointer to the already-read header to verify against.
+ * @return FCB_OK if CRC and length are valid, FCB_CORRUPTED otherwise.
+ */
+static int fcb_verify_record_at(Fcb *fcb, uint32_t sector, uint32_t offset, const FcbRecordHdr *hdr)
+{
+    if (hdr->magic != FCB_RECORD_MAGIC || hdr->length > FCB_MAX_RECORD_SIZE || hdr->length == 0)
+    {
+        return FCB_CORRUPTED;
+    }
+
+    uint32_t sector_size = fcb->config.sector_size;
+    uint32_t data_offset = offset + FCB_RECORD_HDR_SIZE;
+    uint32_t curr_s = sector;
+    
+    // 1. Calculate how much data is in the current sector vs the next
+    uint32_t bytes_to_read = hdr->length;
+    uint8_t calculated_crc = 0xFF; // Standard FCB start CRC
+    
+    // We'll read in chunks to verify CRC without needing a massive 1024b stack buffer
+    uint8_t chunk_buf[64]; 
+    uint32_t processed = 0;
+
+    while (processed < bytes_to_read)
+    {
+        // Handle sector wrap-around for data
+        if (data_offset >= sector_size)
+        {
+            curr_s = (curr_s + 1) % fcb->config.num_sectors;
+            data_offset = FCB_SECTOR_HDR_SIZE; 
+        }
+
+        uint32_t space_in_sector = sector_size - data_offset;
+        uint32_t remaining_data = bytes_to_read - processed;
+        uint32_t chunk_len = (remaining_data < sizeof(chunk_buf)) ? remaining_data : sizeof(chunk_buf);
+        
+        // Clip chunk to sector boundary
+        if (chunk_len > space_in_sector)
+        {
+            chunk_len = space_in_sector;
+        }
+
+        uint32_t addr = fcb->config.start_addr + (curr_s * sector_size) + data_offset;
+        if (fcb->config.flash_read(fcb->config.flash_ctx, addr, chunk_buf, chunk_len) != 0)
+        {
+            return FCB_ERR_FLASH;
+        }
+
+        calculated_crc = fcb_calc_crc8(calculated_crc, chunk_buf, chunk_len);
+        
+        processed += chunk_len;
+        data_offset += chunk_len;
+    }
+
+    // 2. Read the CRC byte (which might also be in the next sector)
+    if (data_offset >= sector_size)
+    {
+        curr_s = (curr_s + 1) % fcb->config.num_sectors;
+        data_offset = FCB_SECTOR_HDR_SIZE;
+    }
+
+    uint8_t stored_crc;
+    uint32_t crc_addr = fcb->config.start_addr + (curr_s * sector_size) + data_offset;
+    if (fcb->config.flash_read(fcb->config.flash_ctx, crc_addr, &stored_crc, 1) != 0)
+    {
+        return FCB_ERR_FLASH;
+    }
+
+    return (stored_crc == calculated_crc) ? FCB_OK : FCB_CORRUPTED;
+}
+
+/**
+ * @brief Scavenger: Searches for the next valid record header and verifies its integrity.
+ * * @param fcb      FCB instance.
+ * @param sector   [in/out] Sector to start search; updated to found sector.
+ * @param offset   [in/out] Offset to start search; updated to found offset.
+ * @param out_hdr  Pointer to header struct to populate if found.
+ * @return FCB_OK if found, FCB_EMPTY if it hits erased flash (0xFF), 
+ * or FCB_CORRUPTED if it hits the scan limit (2048 bytes) without success.
+ */
+int fcb_get_next_valid_record(Fcb *fcb, uint32_t *sector, uint32_t *offset, FcbRecordHdr *out_hdr)
+{
+    uint32_t curr_s = *sector;
+    uint32_t curr_o = *offset;
+    uint32_t scan_count = 0;
+    const uint32_t SCAN_LIMIT = 2048;
+
+    while (scan_count < SCAN_LIMIT)
+    {
+        // 1. Check for sector wrap-around
+        if (curr_o + FCB_RECORD_HDR_SIZE > fcb->config.sector_size)
+        {
+            curr_s = (curr_s + 1) % fcb->config.num_sectors;
+            curr_o = FCB_SECTOR_HDR_SIZE; // Jump to data area of next sector
+        }
+
+        uint8_t potential_magic = 0;
+        if (fcb_flash_read(fcb, fcb->config.start_addr + (curr_s * fcb->config.sector_size) + curr_o, 
+                           &potential_magic, 1) != 0) return FCB_ERR_FLASH;
+
+        // 2. Detect Erased Flash (EndOfData)
+        if (potential_magic == 0xFF) return FCB_EMPTY;
+
+        // 3. Match Magic Byte (0x5A)
+        if (potential_magic == FCB_RECORD_MAGIC)
+        {
+            FcbRecordHdr temp_hdr;
+            if (read_record_header(fcb, curr_s, curr_o, &temp_hdr) == FCB_OK)
+            {
+                // Validate Header Fields
+                if (temp_hdr.length > 0 && temp_hdr.length <= FCB_MAX_RECORD_SIZE)
+                {
+                    // Verify CRC before trusting this header
+                    uint8_t record_data[FCB_MAX_RECORD_SIZE];
+                    size_t read_len = 0;
+                    
+                    // Note: We use a 'dry read' or manual CRC check here
+                    // If CRC is valid, we found it!
+                    if (fcb_verify_record_at(fcb, curr_s, curr_o, &temp_hdr) == FCB_OK)
+                    {
+                        *sector = curr_s;
+                        *offset = curr_o;
+                        memcpy(out_hdr, &temp_hdr, sizeof(FcbRecordHdr));
+                        return FCB_OK;
+                    }
+                }
+            }
+        }
+
+        // 4. Scavenge: Byte-by-byte movement
+        curr_o++;
+        scan_count++;
+    }
+
+    return FCB_CORRUPTED;
+}
+
 static uint8_t fcb_calc_crc8(uint8_t start_crc, const uint8_t *data, uint32_t len)
 {
     uint8_t crc = start_crc;
