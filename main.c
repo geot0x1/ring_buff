@@ -20,6 +20,7 @@ void setUp(void)
 void tearDown(void)
 {
     /* Code run after each test */
+    flash_deinit();
 }
 
 /* ================================================================== */
