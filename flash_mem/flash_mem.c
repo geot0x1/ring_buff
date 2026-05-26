@@ -1,5 +1,5 @@
 #include "flash_mem.h"
-#include <stdio.h>
+#include "trace_logger.h"
 #include <string.h>
 #include <stdint.h>
 #include <windows.h>
