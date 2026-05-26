@@ -259,7 +259,7 @@ int fcb_write(Fcb* fcb, const uint8_t* data, size_t len)
 /*  fcb_read                                                           */
 /* ================================================================== */
 
-static int fcb_read_nolock(Fcb* fcb, uint8_t* buf, size_t buf_len, size_t* len_out)
+static int fcb_try_read_one(Fcb* fcb, uint8_t* buf, size_t buf_len, size_t* len_out)
 {
     if (fcb_is_empty(fcb))
     {
@@ -508,6 +508,22 @@ static int fcb_read_nolock(Fcb* fcb, uint8_t* buf, size_t buf_len, size_t* len_o
         *len_out = hdr.length;
     }
     return FCB_OK;
+}
+
+static int fcb_read_nolock(Fcb* fcb, uint8_t* buf, size_t buf_len, size_t* len_out)
+{
+    int rc;
+
+    do
+    {
+        rc = fcb_try_read_one(fcb, buf, buf_len, len_out);
+        if (rc == FCB_CORRUPTED)
+        {
+            fcb->corrupted_count++;
+        }
+    } while (rc == FCB_CORRUPTED);
+
+    return rc;
 }
 
 int fcb_read(Fcb* fcb, uint8_t* buf, size_t buf_len, size_t* len_out)

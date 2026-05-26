@@ -336,11 +336,10 @@ void test_fcb_append_abort_recovery(void)
     TEST_ASSERT_EQUAL_size_t(sizeof(good), len_out);
     TEST_ASSERT_EQUAL_MEMORY(good, readbuf, sizeof(good));
 
-    /* The aborted record has a valid header on flash but a bad CRC — it surfaces
-     * as FCB_CORRUPTED (not as a valid record).  After skipping it the buffer is
-     * empty. */
-    TEST_ASSERT_EQUAL_INT(FCB_CORRUPTED, fcb_read(&fcb2, readbuf, sizeof(readbuf), &len_out));
-    TEST_ASSERT_EQUAL_INT(FCB_EMPTY,     fcb_read(&fcb2, readbuf, sizeof(readbuf), &len_out));
+    /* The aborted record is auto-skipped (CRC mismatch); fcb_read returns FCB_EMPTY
+     * and increments corrupted_count so the application can detect the event. */
+    TEST_ASSERT_EQUAL_INT(FCB_EMPTY, fcb_read(&fcb2, readbuf, sizeof(readbuf), &len_out));
+    TEST_ASSERT_EQUAL_UINT32(1, fcb2.corrupted_count);
 }
 
 /* ================================================================== */

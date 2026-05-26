@@ -175,6 +175,8 @@ typedef struct
     uint32_t magic;               /**< Internal canary set after successful init (0xFCB0FCB0).       */
 
     bool     is_mounted;          /**< Indicates FCB is fully initialized and ready for use.          */
+
+    uint32_t corrupted_count;     /**< Number of records skipped due to CRC mismatch since last init.*/
 } Fcb;
 
 /* ------------------------------------------------------------------ */
