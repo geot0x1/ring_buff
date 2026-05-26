@@ -20,6 +20,7 @@
 static uint8_t  calc_crc8(const uint8_t *data, uint16_t len);
 static void     write_sector_hdr(uint32_t sector_num, uint32_t seq, uint16_t data_start, uint8_t status);
 static uint32_t write_record_at(uint32_t addr, const uint8_t *data, uint16_t len);
+static uint32_t write_consumed_record_at(uint32_t addr, const uint8_t *data, uint16_t len);
 
 /* ================================================================== */
 /*  Test function declarations                                        */
@@ -34,6 +35,11 @@ void test_fcb_init_wrap_around(void);
 void test_fcb_init_interrupted_erase(void);
 void test_fcb_init_corrupt_scavenge(void);
 void test_fcb_init_spanning_record(void);
+void test_fcb_init_leading_consumed_records(void);
+void test_fcb_init_all_consumed(void);
+void test_fcb_init_consumed_sector_skipped(void);
+void test_fcb_init_consumed_records_cross_sector(void);
+void test_fcb_init_partial_consumed_multi_sector(void);
 
 /* ================================================================== */
 /*  Helper implementations                                            */
@@ -77,6 +83,21 @@ static uint32_t write_record_at(uint32_t addr, const uint8_t *data, uint16_t len
     hdr.magic  = FCB_RECORD_MAGIC;
     hdr.length = len;
     hdr.status = FCB_RECORD_ACTIVE;
+    (void)flash_write(addr, &hdr, (uint32_t)sizeof(hdr));
+    (void)flash_write(addr + (uint32_t)sizeof(hdr), data, (uint32_t)len);
+    uint8_t crc = calc_crc8(data, len);
+    (void)flash_write(addr + (uint32_t)sizeof(hdr) + (uint32_t)len, &crc, 1U);
+    return (uint32_t)sizeof(hdr) + (uint32_t)len + 1U;
+}
+
+/* Write a record whose status byte is already 0x00 (consumed/deleted).
+ * NOR AND: erased 0xFF -> 0xFF & 0x00 = 0x00 for the status field. */
+static uint32_t write_consumed_record_at(uint32_t addr, const uint8_t *data, uint16_t len)
+{
+    FcbRecordHdr hdr;
+    hdr.magic  = FCB_RECORD_MAGIC;
+    hdr.length = len;
+    hdr.status = FCB_RECORD_CONSUMED;
     (void)flash_write(addr, &hdr, (uint32_t)sizeof(hdr));
     (void)flash_write(addr + (uint32_t)sizeof(hdr), data, (uint32_t)len);
     uint8_t crc = calc_crc8(data, len);
@@ -358,6 +379,180 @@ void test_fcb_init_spanning_record(void)
 }
 
 /* ================================================================== */
+/*  Fragmented-record tests                                           */
+/* ================================================================== */
+
+/* Single sector: consumed records at the front, active at the back.
+ * read/delete must skip past the consumed records to the first active one. */
+void test_fcb_init_leading_consumed_records(void)
+{
+    flash_init(NULL);
+
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+
+    uint32_t off = FCB_SECTOR_HDR_SIZE;
+    off += write_consumed_record_at(0 * SECTOR_SIZE + off, (const uint8_t *)"Consumed 1", 10);
+    off += write_consumed_record_at(0 * SECTOR_SIZE + off, (const uint8_t *)"Consumed 2", 10);
+    const uint32_t first_active_off = off;
+    off += write_record_at(0 * SECTOR_SIZE + off, (const uint8_t *)"Active 3", 8);
+    off += write_record_at(0 * SECTOR_SIZE + off, (const uint8_t *)"Active 4", 7);
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0,               fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off,             fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(0,               fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(first_active_off, fcb.read_offset);
+    TEST_ASSERT_EQUAL_UINT32(0,               fcb.delete_sector);
+    TEST_ASSERT_EQUAL_UINT32(first_active_off, fcb.delete_offset);
+
+    flash_deinit();
+}
+
+/* Single sector where every record has been consumed.
+ * No active records remain; read, delete, and write must all converge
+ * at the same position (FCB appears empty). */
+void test_fcb_init_all_consumed(void)
+{
+    flash_init(NULL);
+
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+
+    uint32_t off = FCB_SECTOR_HDR_SIZE;
+    off += write_consumed_record_at(0 * SECTOR_SIZE + off, (const uint8_t *)"Gone 1", 6);
+    off += write_consumed_record_at(0 * SECTOR_SIZE + off, (const uint8_t *)"Gone 2", 6);
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0,               fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off,             fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(fcb.write_sector, fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(fcb.write_offset, fcb.read_offset);
+    TEST_ASSERT_EQUAL_UINT32(fcb.write_sector, fcb.delete_sector);
+    TEST_ASSERT_EQUAL_UINT32(fcb.write_offset, fcb.delete_offset);
+
+    flash_deinit();
+}
+
+/* Sector 0 has its header status set to CONSUMED (0x00), so fcb_find_oldest_newest
+ * excludes it entirely.  Only sector 1 is visible; pointers recover from sector 1. */
+void test_fcb_init_consumed_sector_skipped(void)
+{
+    flash_init(NULL);
+
+    /* Sector 0: valid magic but status = CONSUMED — invisible to scanner. */
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_CONSUMED);
+    write_consumed_record_at(0 * SECTOR_SIZE + FCB_SECTOR_HDR_SIZE,
+                             (const uint8_t *)"Stale", 5);
+
+    /* Sector 1: two active records. */
+    write_sector_hdr(1, 2, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+    uint32_t off = FCB_SECTOR_HDR_SIZE;
+    off += write_record_at(1 * SECTOR_SIZE + off, (const uint8_t *)"New Data 1", 10);
+    off += write_record_at(1 * SECTOR_SIZE + off, (const uint8_t *)"New Data 2", 10);
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(1,                 fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off,               fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(1,                 fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.read_offset);
+
+    flash_deinit();
+}
+
+/* Two valid sectors.  All records in the oldest sector are consumed;
+ * the chain walker finds the first active record in the newer sector. */
+void test_fcb_init_consumed_records_cross_sector(void)
+{
+    flash_init(NULL);
+
+    /* Sector 0 (oldest, seq=1): both records consumed. */
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+    uint32_t off0 = FCB_SECTOR_HDR_SIZE;
+    off0 += write_consumed_record_at(0 * SECTOR_SIZE + off0, (const uint8_t *)"Old 1", 5);
+    off0 += write_consumed_record_at(0 * SECTOR_SIZE + off0, (const uint8_t *)"Old 2", 5);
+
+    /* Sector 1 (newest, seq=2): two active records. */
+    write_sector_hdr(1, 2, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+    uint32_t off1 = FCB_SECTOR_HDR_SIZE;
+    off1 += write_record_at(1 * SECTOR_SIZE + off1, (const uint8_t *)"New 1", 5);
+    off1 += write_record_at(1 * SECTOR_SIZE + off1, (const uint8_t *)"New 2", 5);
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(1,                 fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off1,              fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(1,                 fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.read_offset);
+    TEST_ASSERT_EQUAL_UINT32(1,                 fcb.delete_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.delete_offset);
+
+    flash_deinit();
+}
+
+/* Sector 0 (oldest): 1 consumed + 2 active records.
+ * Sector 1 (newest): 1 active record.
+ * read/delete land on the first active record in sector 0;
+ * write lands after the record in sector 1. */
+void test_fcb_init_partial_consumed_multi_sector(void)
+{
+    flash_init(NULL);
+
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+    uint32_t off0 = FCB_SECTOR_HDR_SIZE;
+    off0 += write_consumed_record_at(0 * SECTOR_SIZE + off0, (const uint8_t *)"S0 old", 6);
+    const uint32_t first_active_off = off0;
+    off0 += write_record_at(0 * SECTOR_SIZE + off0, (const uint8_t *)"S0 keep 1", 9);
+    off0 += write_record_at(0 * SECTOR_SIZE + off0, (const uint8_t *)"S0 keep 2", 9);
+
+    write_sector_hdr(1, 2, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+    uint32_t off1 = FCB_SECTOR_HDR_SIZE;
+    off1 += write_record_at(1 * SECTOR_SIZE + off1, (const uint8_t *)"S1 live", 7);
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(1,               fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off1,            fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(0,               fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(first_active_off, fcb.read_offset);
+    TEST_ASSERT_EQUAL_UINT32(0,               fcb.delete_sector);
+    TEST_ASSERT_EQUAL_UINT32(first_active_off, fcb.delete_offset);
+
+    flash_deinit();
+}
+
+/* ================================================================== */
 /*  Runner                                                            */
 /* ================================================================== */
 
@@ -372,4 +567,9 @@ void run_fcb_init_tests(void)
     RUN_TEST(test_fcb_init_interrupted_erase);
     RUN_TEST(test_fcb_init_corrupt_scavenge);
     RUN_TEST(test_fcb_init_spanning_record);
+    RUN_TEST(test_fcb_init_leading_consumed_records);
+    RUN_TEST(test_fcb_init_all_consumed);
+    RUN_TEST(test_fcb_init_consumed_sector_skipped);
+    RUN_TEST(test_fcb_init_consumed_records_cross_sector);
+    RUN_TEST(test_fcb_init_partial_consumed_multi_sector);
 }
