@@ -40,6 +40,8 @@ void test_fcb_init_all_consumed(void);
 void test_fcb_init_consumed_sector_skipped(void);
 void test_fcb_init_consumed_records_cross_sector(void);
 void test_fcb_init_partial_consumed_multi_sector(void);
+void test_fcb_init_fragmented_rule1_crc_match(void);
+void test_fcb_init_fragmented_rule1_crc_fail_rule2(void);
 
 /* ================================================================== */
 /*  Helper implementations                                            */
@@ -553,6 +555,107 @@ void test_fcb_init_partial_consumed_multi_sector(void)
 }
 
 /* ================================================================== */
+/*  Fragmented-record / skip-logic tests                              */
+/* ================================================================== */
+
+/* A record between two valid records whose magic byte was corrupted but whose
+ * payload and CRC are intact.  fcb_skip_corrupted_record Rule 1 reads the
+ * payload, recomputes the CRC-8, finds a match, and returns the offset of the
+ * next record directly — no byte-walk needed. */
+void test_fcb_init_fragmented_rule1_crc_match(void)
+{
+    flash_init(NULL);
+
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+
+    uint32_t off = FCB_SECTOR_HDR_SIZE;
+    off += write_record_at(0U * SECTOR_SIZE + off, (const uint8_t *)"Before", 6);
+    /* off = 27 */
+
+    /* Fragment: magic = 0xA5 (≠ FCB_RECORD_MAGIC 0x5A), length = 5.
+     * Payload and CRC are written correctly so Rule 1 succeeds. */
+    const uint8_t frag_payload[5] = {0xDEU, 0xADU, 0xBEU, 0xEFU, 0x99U};
+    const uint8_t frag_crc        = calc_crc8(frag_payload, (uint16_t)sizeof(frag_payload));
+
+    FcbRecordHdr frag_hdr;
+    frag_hdr.magic  = 0xA5U;
+    frag_hdr.length = (uint16_t)sizeof(frag_payload);
+    frag_hdr.status = FCB_RECORD_ACTIVE;
+    (void)flash_write(0U * SECTOR_SIZE + off, &frag_hdr, (uint32_t)sizeof(frag_hdr));
+    off += (uint32_t)sizeof(frag_hdr);                      /* off = 31 */
+    (void)flash_write(0U * SECTOR_SIZE + off, frag_payload, (uint32_t)sizeof(frag_payload));
+    off += (uint32_t)sizeof(frag_payload);                  /* off = 36 */
+    (void)flash_write(0U * SECTOR_SIZE + off, &frag_crc, 1U);
+    off += 1U;                                              /* off = 37 */
+
+    off += write_record_at(0U * SECTOR_SIZE + off, (const uint8_t *)"After", 5);
+    /* off = 47 */
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0,                   fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off,                 fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(0,                   fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.read_offset);
+
+    flash_deinit();
+}
+
+/* A record between two valid records whose magic AND CRC are both wrong.
+ * Rule 1 in fcb_skip_corrupted_record reads the plausible-length payload,
+ * computes CRC = 0xBE (five 0xCC bytes), but finds stored CRC = 0x00 (mismatch).
+ * Rule 1 fails; execution falls through to the Rule 2 byte-walk, which scans
+ * forward and finds the FCB_RECORD_MAGIC (0x5A) of the next valid record. */
+void test_fcb_init_fragmented_rule1_crc_fail_rule2(void)
+{
+    flash_init(NULL);
+
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+
+    uint32_t off = FCB_SECTOR_HDR_SIZE;
+    off += write_record_at(0U * SECTOR_SIZE + off, (const uint8_t *)"Before", 6);
+    /* off = 27 */
+
+    /* Fragment: magic = 0xC3, length = 5 (plausible; triggers Rule 1).
+     * Data is 5 x 0xCC; correct CRC would be 0xBE but we write 0x00.
+     * Rule 1 detects the mismatch and falls through to Rule 2.
+     * No 0x5A bytes appear in the 10-byte corrupt block, so Rule 2's
+     * byte-walk reaches the "After" record at offset 37. */
+    uint8_t corrupt[10] = {0xC3U,                                   /* magic ≠ 0x5A          */
+                           0x05U, 0x00U,                            /* length = 5 (LE)       */
+                           0xFFU,                                   /* status                */
+                           0xCCU, 0xCCU, 0xCCU, 0xCCU, 0xCCU,     /* data (CRC = 0xBE)     */
+                           0x00U};                                  /* bad CRC (0x00 ≠ 0xBE) */
+    (void)flash_write(0U * SECTOR_SIZE + off, corrupt, (uint32_t)sizeof(corrupt));
+    off += (uint32_t)sizeof(corrupt);
+    /* off = 37 */
+
+    off += write_record_at(0U * SECTOR_SIZE + off, (const uint8_t *)"After", 6);
+    /* off = 48 */
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+    TEST_ASSERT_EQUAL_UINT32(0,                   fcb.write_sector);
+    TEST_ASSERT_EQUAL_UINT32(off,                 fcb.write_offset);
+    TEST_ASSERT_EQUAL_UINT32(0,                   fcb.read_sector);
+    TEST_ASSERT_EQUAL_UINT32(FCB_SECTOR_HDR_SIZE, fcb.read_offset);
+
+    flash_deinit();
+}
+
+/* ================================================================== */
 /*  Runner                                                            */
 /* ================================================================== */
 
@@ -572,4 +675,6 @@ void run_fcb_init_tests(void)
     RUN_TEST(test_fcb_init_consumed_sector_skipped);
     RUN_TEST(test_fcb_init_consumed_records_cross_sector);
     RUN_TEST(test_fcb_init_partial_consumed_multi_sector);
+    RUN_TEST(test_fcb_init_fragmented_rule1_crc_match);
+    RUN_TEST(test_fcb_init_fragmented_rule1_crc_fail_rule2);
 }
