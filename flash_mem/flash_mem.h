@@ -14,8 +14,11 @@ extern "C" {
 #define FLASH_SIZE         (FLASH_SECTOR_SIZE * FLASH_SECTOR_COUNT)
 
 /**
- * @brief Initialize the flash memory simulator using a backing file.
- * * @param filename Path to the binary file simulating the flash hardware.
+ * @brief Initialize the RAM-backed flash simulator.
+ *
+ * The flash buffer is reset to erased state (0xFF).
+ *
+ * @param filename Unused. Kept for API compatibility.
  */
 void flash_init(const char *filename);
 

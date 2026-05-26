@@ -4,12 +4,14 @@
 #include <stdint.h>
 #include <windows.h>
 
-static char g_flash_filename[256] = "flash.bin";
+static uint8_t g_flash_mem[FLASH_SIZE];
 static CRITICAL_SECTION g_flash_lock;
 static int g_is_initialized = 0;
 
 void flash_init(const char *filename)
 {
+    (void)filename;
+
     if (!g_is_initialized)
     {
         InitializeCriticalSection(&g_flash_lock);
@@ -18,62 +20,32 @@ void flash_init(const char *filename)
 
     EnterCriticalSection(&g_flash_lock);
     {
-        if (filename != NULL)
-        {
-            strncpy(g_flash_filename, filename, sizeof(g_flash_filename) - 1);
-        }
-
-        // Try to open to see if it exists
-        FILE *file = fopen(g_flash_filename, "rb");
-        if (file == NULL)
-        {
-            printf("Flash file does not exist. Creating it...\n");
-            // File doesn't exist, create it but do not format/modify contents
-            file = fopen(g_flash_filename, "wb");
-            if (file != NULL)
-            {
-                // Set the file size to FLASH_SIZE without writing data
-                fseek(file, FLASH_SIZE - 1, SEEK_SET);
-                uint8_t dummy = 0;
-                fwrite(&dummy, 1, 1, file);
-                fclose(file);
-            }
-        }
-        else
-        {
-            fclose(file);
-        }
+        memset(g_flash_mem, 0xFF, sizeof(g_flash_mem));
     }
     LeaveCriticalSection(&g_flash_lock);
 }
 
 void flash_full_erase(void)
 {
+    if (!g_is_initialized)
+    {
+        return;
+    }
+
     EnterCriticalSection(&g_flash_lock);
     {
-        FILE *file = fopen(g_flash_filename, "rb+");
-        if (file == NULL)
-        {
-            // If erase is called but file is missing, create it as erased
-            file = fopen(g_flash_filename, "wb");
-        }
-
-        if (file != NULL)
-        {
-            uint8_t erase_val = 0xFF;
-            fseek(file, 0, SEEK_SET);
-            for (uint32_t i = 0; i < FLASH_SIZE; i++)
-            {
-                fwrite(&erase_val, 1, 1, file);
-            }
-            fclose(file);
-        }
+        memset(g_flash_mem, 0xFF, sizeof(g_flash_mem));
     }
     LeaveCriticalSection(&g_flash_lock);
 }
 
 int flash_write(uint32_t addr, const void *data, uint32_t len)
 {
+    if (!g_is_initialized)
+    {
+        return -1;
+    }
+
     if (addr + len > FLASH_SIZE)
     {
         return -1;
@@ -82,27 +54,12 @@ int flash_write(uint32_t addr, const void *data, uint32_t len)
     int result = 0;
     EnterCriticalSection(&g_flash_lock);
     {
-        FILE *file = fopen(g_flash_filename, "rb+");
-        if (file == NULL)
+        const uint8_t *p_data = (const uint8_t *)data;
+        for (uint32_t i = 0; i < len; i++)
         {
-            result = -1;
-        }
-        else
-        {
-            const uint8_t *p_data = (const uint8_t *)data;
-            for (uint32_t i = 0; i < len; i++)
-            {
-                uint8_t current_byte;
-                fseek(file, addr + i, SEEK_SET);
-                fread(&current_byte, 1, 1, file);
-
-                // NOR logic: bits can only be pulled down to 0
-                uint8_t new_byte = current_byte & p_data[i];
-
-                fseek(file, addr + i, SEEK_SET);
-                fwrite(&new_byte, 1, 1, file);
-            }
-            fclose(file);
+            uint8_t current_byte = g_flash_mem[addr + i];
+            uint8_t new_byte = current_byte & p_data[i];
+            g_flash_mem[addr + i] = new_byte;
         }
     }
     LeaveCriticalSection(&g_flash_lock);
@@ -112,6 +69,11 @@ int flash_write(uint32_t addr, const void *data, uint32_t len)
 
 int flash_read(uint32_t addr, void *data, uint32_t size)
 {
+    if (!g_is_initialized)
+    {
+        return -1;
+    }
+
     if (addr + size > FLASH_SIZE)
     {
         return -1;
@@ -120,17 +82,7 @@ int flash_read(uint32_t addr, void *data, uint32_t size)
     int result = 0;
     EnterCriticalSection(&g_flash_lock);
     {
-        FILE *file = fopen(g_flash_filename, "rb");
-        if (file == NULL)
-        {
-            result = -1;
-        }
-        else
-        {
-            fseek(file, addr, SEEK_SET);
-            fread(data, 1, size, file);
-            fclose(file);
-        }
+        memcpy(data, &g_flash_mem[addr], size);
     }
     LeaveCriticalSection(&g_flash_lock);
     
@@ -139,6 +91,11 @@ int flash_read(uint32_t addr, void *data, uint32_t size)
 
 int flash_erase_sector(uint32_t addr)
 {
+    if (!g_is_initialized)
+    {
+        return -1;
+    }
+
     uint32_t base_addr = addr & ~(FLASH_SECTOR_SIZE - 1);
     if (base_addr + FLASH_SECTOR_SIZE > FLASH_SIZE)
     {
@@ -148,21 +105,7 @@ int flash_erase_sector(uint32_t addr)
     int result = 0;
     EnterCriticalSection(&g_flash_lock);
     {
-        FILE *file = fopen(g_flash_filename, "rb+");
-        if (file == NULL)
-        {
-            result = -1;
-        }
-        else
-        {
-            uint8_t erase_val = 0xFF;
-            fseek(file, base_addr, SEEK_SET);
-            for (uint32_t i = 0; i < FLASH_SECTOR_SIZE; i++)
-            {
-                fwrite(&erase_val, 1, 1, file);
-            }
-            fclose(file);
-        }
+        memset(&g_flash_mem[base_addr], 0xFF, FLASH_SECTOR_SIZE);
     }
     LeaveCriticalSection(&g_flash_lock);
     
@@ -171,39 +114,52 @@ int flash_erase_sector(uint32_t addr)
 
 void flash_print_sector(uint32_t addr, uint32_t num_bytes)
 {
+    if (!g_is_initialized)
+    {
+        return;
+    }
+
     uint32_t base_addr = addr & ~(FLASH_SECTOR_SIZE - 1);
     uint8_t buffer[16];
 
     EnterCriticalSection(&g_flash_lock);
     {
-        FILE *file = fopen(g_flash_filename, "rb");
-        if (file != NULL)
-        {
-            printf("--- Sector at 0x%08X (printing %u bytes) ---\n", base_addr, num_bytes);
-            
-            for (uint32_t i = 0; i < num_bytes; i += 16)
-            {
-                printf("%08X: ", base_addr + i);
-                
-                fseek(file, base_addr + i, SEEK_SET);
-                size_t read_len = fread(buffer, 1, 16, file);
+        printf("--- Sector at 0x%08X (printing %u bytes) ---\n", base_addr, num_bytes);
 
-                for (uint32_t j = 0; j < 16; j++)
-                {
-                    if (i + j < num_bytes && j < read_len)
-                    {
-                        printf("%02X ", buffer[j]);
-                    }
-                    else
-                    {
-                        printf("   ");
-                    }
-                }
-                printf("\n");
+        for (uint32_t i = 0; i < num_bytes; i += 16)
+        {
+            uint32_t line_addr = base_addr + i;
+            uint32_t remaining = num_bytes - i;
+            uint32_t read_len = (remaining < sizeof(buffer)) ? remaining : (uint32_t)sizeof(buffer);
+
+            if (line_addr >= FLASH_SIZE)
+            {
+                break;
             }
-            printf("---------------------------\n");
-            fclose(file);
+
+            if (line_addr + read_len > FLASH_SIZE)
+            {
+                read_len = FLASH_SIZE - line_addr;
+            }
+
+            memcpy(buffer, &g_flash_mem[line_addr], read_len);
+
+            printf("%08X: ", line_addr);
+
+            for (uint32_t j = 0; j < 16; j++)
+            {
+                if (j < read_len)
+                {
+                    printf("%02X ", buffer[j]);
+                }
+                else
+                {
+                    printf("   ");
+                }
+            }
+            printf("\n");
         }
+        printf("---------------------------\n");
     }
     LeaveCriticalSection(&g_flash_lock);
 }
