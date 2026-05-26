@@ -30,6 +30,7 @@ enable_testing()
 add_executable(test_fcb main.c
     test_fcb_init.c
     test_fcb_rw.c
+    test_fcb_append.c
 )
 
 target_include_directories(test_fcb PRIVATE

@@ -8,12 +8,31 @@
 #include <string.h>
 
 /* ================================================================== */
-/*  fcb_write                                                          */
+/*  Look-ahead erase helper (shared by reserve_space and commit)      */
 /* ================================================================== */
 
-static int fcb_write_nolock(Fcb* fcb, const uint8_t* data, size_t len)
+static int look_ahead_erase(Fcb* fcb, uint32_t next_sector)
 {
-    uint32_t total_rec_len = FCB_RECORD_HDR_SIZE + len + 1;
+    if (fcb_is_sector_erased(fcb, next_sector))
+    {
+        return FCB_OK;
+    }
+
+    if (fcb->read_sector == next_sector || fcb->delete_sector == next_sector)
+    {
+        return FCB_FULL;
+    }
+
+    return erase_sector(fcb, next_sector);
+}
+
+/* ================================================================== */
+/*  fcb_reserve_space                                                  */
+/* ================================================================== */
+
+int fcb_reserve_space(Fcb* fcb, size_t len, FcbEntry* entry)
+{
+    uint32_t total_rec_len = FCB_RECORD_HDR_SIZE + (uint32_t)len + 1U;
     uint32_t avail_space   = fcb->config.sector_size - fcb->write_offset;
 
     uint32_t curr_sector = fcb->write_sector;
@@ -24,162 +43,198 @@ static int fcb_write_nolock(Fcb* fcb, const uint8_t* data, size_t len)
     {
         uint32_t next_sector = fcb_next_sector(fcb, curr_sector);
 
-        /* Strict Look-Ahead Rule: Verify next sector is erased */
-        if (!fcb_is_sector_erased(fcb, next_sector))
+        int rc = look_ahead_erase(fcb, next_sector);
+        if (rc != FCB_OK)
         {
-            if (fcb->read_sector != next_sector && fcb->delete_sector != next_sector)
-            {
-                int erase_rc = erase_sector(fcb, next_sector);
-                if (erase_rc != FCB_OK)
-                {
-                    return erase_rc;
-                }
-            }
-            else
-            {
-                return FCB_FULL;
-            }
+            return rc;
         }
 
         if (avail_space < FCB_RECORD_HDR_SIZE)
         {
-            /* Header does not fit in current sector, transition to next */
+            /* Case B: header does not fit — move entirely to next sector */
             curr_sector = next_sector;
             curr_offset = FCB_SECTOR_HDR_SIZE;
 
-            int rc = write_sector_header(fcb, curr_sector, next_seq++, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+            rc = write_sector_header(fcb, curr_sector, next_seq++, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
             if (rc != FCB_OK)
             {
                 return rc;
             }
 
             avail_space = fcb->config.sector_size - curr_offset;
+
+            /* Fall through to Case A with the updated sector/offset */
         }
         else
         {
-            /* Header fits, data spans into next sector */
-            int rc = write_record_header(fcb, curr_sector, curr_offset, (uint16_t)len);
+            /* Case C: header fits, but data+CRC spans into next sector */
+            rc = write_record_header(fcb, curr_sector, curr_offset, (uint16_t)len);
             if (rc != FCB_OK)
             {
                 return rc;
             }
 
-            uint32_t curr_write_addr =
-              fcb->config.start_addr + (curr_sector * fcb->config.sector_size) + curr_offset + FCB_RECORD_HDR_SIZE;
             uint32_t payload_space = avail_space - FCB_RECORD_HDR_SIZE;
-
-            uint32_t data_chunk1 = (len < payload_space) ? len : payload_space;
-            uint8_t  crc         = fcb_calc_crc8(0xFF, data, (uint32_t)len);
-
-            if (data_chunk1 > 0)
-            {
-                rc = fcb_flash_write(fcb, curr_write_addr, data, data_chunk1);
-                if (rc != FCB_OK)
-                {
-                    return rc;
-                }
-            }
-
-            uint32_t spilled_len = (len + 1) - payload_space;
-            curr_sector          = next_sector;
+            uint32_t spilled_len   = ((uint32_t)len + 1U) - payload_space;
 
             rc = write_sector_header(
-              fcb, curr_sector, next_seq++, FCB_SECTOR_HDR_SIZE + spilled_len, FCB_SECTOR_STATUS_VALID);
+              fcb, next_sector, next_seq++, FCB_SECTOR_HDR_SIZE + spilled_len, FCB_SECTOR_STATUS_VALID);
             if (rc != FCB_OK)
             {
                 return rc;
             }
 
-            uint32_t next_write_addr =
-              fcb->config.start_addr + (curr_sector * fcb->config.sector_size) + FCB_SECTOR_HDR_SIZE;
+            entry->start_sector  = curr_sector;
+            entry->start_offset  = curr_offset;
+            entry->length        = (uint32_t)len;
+            entry->bytes_written = 0;
+            entry->curr_sector   = curr_sector;
+            entry->curr_offset   = curr_offset + FCB_RECORD_HDR_SIZE;
+            entry->crc_sector    = next_sector;
+            entry->crc_offset    = FCB_SECTOR_HDR_SIZE + spilled_len - 1U;
+            entry->crc           = 0xFF;
+            entry->in_progress   = 1;
 
-            if (data_chunk1 < len)
-            {
-                uint32_t data_chunk2 = len - data_chunk1;
-                rc                   = fcb_flash_write(fcb, next_write_addr, data + data_chunk1, data_chunk2);
-                if (rc != FCB_OK)
-                {
-                    return rc;
-                }
-                next_write_addr += data_chunk2;
-            }
-
-            rc = fcb_flash_write(fcb, next_write_addr, &crc, 1);
-            if (rc != FCB_OK)
-            {
-                return rc;
-            }
-
-            fcb->write_sector  = curr_sector;
-            fcb->write_offset  = FCB_SECTOR_HDR_SIZE + spilled_len;
             fcb->next_sequence = next_seq;
             return FCB_OK;
         }
     }
 
-    if (total_rec_len <= avail_space)
+    /* Case A (or Case B fall-through): entire record fits in curr_sector */
+    int rc = write_record_header(fcb, curr_sector, curr_offset, (uint16_t)len);
+    if (rc != FCB_OK)
     {
-        int rc = write_record_header(fcb, curr_sector, curr_offset, (uint16_t)len);
-        if (rc != FCB_OK)
-        {
-            return rc;
-        }
-
-        uint32_t write_addr =
-          fcb->config.start_addr + (curr_sector * fcb->config.sector_size) + curr_offset + FCB_RECORD_HDR_SIZE;
-
-        rc = fcb_flash_write(fcb, write_addr, data, len);
-        if (rc != FCB_OK)
-        {
-            return rc;
-        }
-
-        uint8_t crc = fcb_calc_crc8(0xFF, data, (uint32_t)len);
-        rc          = fcb_flash_write(fcb, write_addr + len, &crc, 1);
-        if (rc != FCB_OK)
-        {
-            return rc;
-        }
-
-        fcb->write_sector = curr_sector;
-        fcb->write_offset = curr_offset + total_rec_len;
-
-        if (fcb->write_offset == fcb->config.sector_size)
-        {
-            uint32_t next_sector = fcb_next_sector(fcb, fcb->write_sector);
-
-            if (!fcb_is_sector_erased(fcb, next_sector))
-            {
-                if (fcb->read_sector != next_sector && fcb->delete_sector != next_sector)
-                {
-                    int erase_rc = erase_sector(fcb, next_sector);
-                    if (erase_rc != FCB_OK)
-                    {
-                        return erase_rc;
-                    }
-                }
-                else
-                {
-                    fcb->next_sequence = next_seq;
-                    return FCB_OK; /* Cannot advance safely, leave at boundary and return success */
-                }
-            }
-
-            rc = write_sector_header(fcb, next_sector, next_seq++, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
-            if (rc != FCB_OK)
-            {
-                return rc;
-            }
-
-            fcb->write_sector = next_sector;
-            fcb->write_offset = FCB_SECTOR_HDR_SIZE;
-        }
-
-        fcb->next_sequence = next_seq;
-        return FCB_OK;
+        return rc;
     }
 
-    return FCB_CORRUPTED;
+    entry->start_sector  = curr_sector;
+    entry->start_offset  = curr_offset;
+    entry->length        = (uint32_t)len;
+    entry->bytes_written = 0;
+    entry->curr_sector   = curr_sector;
+    entry->curr_offset   = curr_offset + FCB_RECORD_HDR_SIZE;
+    entry->crc_sector    = curr_sector;
+    entry->crc_offset    = curr_offset + FCB_RECORD_HDR_SIZE + (uint32_t)len;
+    entry->crc           = 0xFF;
+    entry->in_progress   = 1;
+
+    fcb->next_sequence = next_seq;
+    return FCB_OK;
+}
+
+/* ================================================================== */
+/*  fcb_stream_bytes                                                   */
+/* ================================================================== */
+
+int fcb_stream_bytes(Fcb* fcb, FcbEntry* entry, const uint8_t* data, size_t len)
+{
+    uint32_t remaining = (uint32_t)len;
+
+    while (remaining > 0)
+    {
+        uint32_t avail = fcb->config.sector_size - entry->curr_offset;
+        uint32_t chunk = (remaining < avail) ? remaining : avail;
+
+        uint32_t addr = fcb->config.start_addr
+                      + (entry->curr_sector * fcb->config.sector_size)
+                      + entry->curr_offset;
+
+        int rc = fcb_flash_write(fcb, addr, data, chunk);
+        if (rc != FCB_OK)
+        {
+            return rc;
+        }
+
+        entry->crc = fcb_calc_crc8(entry->crc, data, chunk);
+        data                 += chunk;
+        remaining            -= chunk;
+        entry->curr_offset   += chunk;
+        entry->bytes_written += chunk;
+
+        if (entry->curr_offset == fcb->config.sector_size)
+        {
+            entry->curr_sector = fcb_next_sector(fcb, entry->curr_sector);
+            entry->curr_offset = FCB_SECTOR_HDR_SIZE;
+        }
+    }
+
+    return FCB_OK;
+}
+
+/* ================================================================== */
+/*  fcb_commit_record                                                  */
+/* ================================================================== */
+
+int fcb_commit_record(Fcb* fcb, FcbEntry* entry)
+{
+    uint32_t addr = fcb->config.start_addr
+                  + (entry->crc_sector * fcb->config.sector_size)
+                  + entry->crc_offset;
+
+    int rc = fcb_flash_write(fcb, addr, &entry->crc, 1);
+    if (rc != FCB_OK)
+    {
+        return rc;
+    }
+
+    uint32_t new_sector = entry->crc_sector;
+    uint32_t new_offset = entry->crc_offset + 1U;
+    uint32_t next_seq   = fcb->next_sequence;
+
+    if (new_offset == fcb->config.sector_size)
+    {
+        uint32_t next_sector = fcb_next_sector(fcb, new_sector);
+
+        rc = look_ahead_erase(fcb, next_sector);
+        if (rc == FCB_FULL)
+        {
+            /* Cannot advance — leave write_ptr at boundary */
+            fcb->write_sector  = new_sector;
+            fcb->write_offset  = new_offset;
+            fcb->next_sequence = next_seq;
+            return FCB_OK;
+        }
+        if (rc != FCB_OK)
+        {
+            return rc;
+        }
+
+        rc = write_sector_header(fcb, next_sector, next_seq++, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+        if (rc != FCB_OK)
+        {
+            return rc;
+        }
+
+        new_sector = next_sector;
+        new_offset = FCB_SECTOR_HDR_SIZE;
+    }
+
+    fcb->write_sector  = new_sector;
+    fcb->write_offset  = new_offset;
+    fcb->next_sequence = next_seq;
+    return FCB_OK;
+}
+
+/* ================================================================== */
+/*  fcb_write (public, lock-wrapping composition)                      */
+/* ================================================================== */
+
+static int fcb_write_nolock(Fcb* fcb, const uint8_t* data, size_t len)
+{
+    FcbEntry entry;
+    int rc = fcb_reserve_space(fcb, len, &entry);
+    if (rc != FCB_OK)
+    {
+        return rc;
+    }
+
+    rc = fcb_stream_bytes(fcb, &entry, data, len);
+    if (rc != FCB_OK)
+    {
+        return rc;
+    }
+
+    return fcb_commit_record(fcb, &entry);
 }
 
 int fcb_write(Fcb* fcb, const uint8_t* data, size_t len)

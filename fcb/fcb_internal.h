@@ -10,6 +10,7 @@
 #define FCB_INTERNAL_H
 
 #include "fcb.h"
+#include "fcb_append.h"
 #include "trace_logger.h"
 
 #include <stdbool.h>
@@ -90,5 +91,13 @@ int  fcb_find_oldest_newest(Fcb* fcb,
                             uint32_t* max_seq_out);
 int  fcb_init_format_initial(Fcb* fcb);
 int  fcb_recover_pointers(Fcb* fcb, int oldest_sector, int newest_sector);
+
+/* ================================================================== */
+/*  Streaming-write helpers (fcb_ops.c)                                */
+/* ================================================================== */
+
+int fcb_reserve_space(Fcb* fcb, size_t len, FcbEntry* entry);
+int fcb_stream_bytes(Fcb* fcb, FcbEntry* entry, const uint8_t* data, size_t len);
+int fcb_commit_record(Fcb* fcb, FcbEntry* entry);
 
 #endif /* FCB_INTERNAL_H */

@@ -6,6 +6,7 @@
 #include "unity.h"
 #include "test_fcb_init.h"
 #include "test_fcb_rw.h"
+#include "test_fcb_append.h"
 #include "flash_mem/flash_mem.h"
 
 /* ================================================================== */
@@ -37,6 +38,7 @@ int main(void)
 
     run_fcb_init_tests();
     run_fcb_rw_tests();
+    run_fcb_append_tests();
 
     return UNITY_END();
 }
