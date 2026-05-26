@@ -260,8 +260,6 @@ bool fcb_is_full(const Fcb *fcb);
  */
 bool fcb_is_empty(const Fcb *fcb);
 
-int fcb_get_next_valid_record(Fcb *fcb, uint32_t *sector, uint32_t *offset, FcbRecordHdr *out_hdr);
-
 #ifdef __cplusplus
 }
 #endif
