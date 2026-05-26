@@ -44,6 +44,7 @@ void test_fcb_init_fragmented_rule1_crc_match(void);
 void test_fcb_init_fragmented_rule1_crc_fail_rule2(void);
 void test_fcb_init_vuln_single_sector_unbounded_length(void);
 void test_fcb_init_vuln_data_start_beyond_sector(void);
+void test_fcb_read_vuln_small_buffer_consumes_record(void);
 
 /* ================================================================== */
 /*  Helper implementations                                            */
@@ -776,6 +777,63 @@ void test_fcb_init_vuln_data_start_beyond_sector(void)
     flash_deinit();
 }
 
+/* VULNERABILITY (VULN-3):
+ *   fcb_read_nolock advances the read pointer past the record BEFORE checking
+ *   whether the caller's buffer was big enough.  Worse, the CRC verification
+ *   is also gated by `if (!buffer_too_small)`, so:
+ *     - the record is silently consumed (data loss — no way to retry);
+ *     - a corrupted CRC is never noticed when the buffer is too small.
+ *
+ *   Expected safe behaviour: a too-small buffer should either leave the read
+ *   pointer untouched (so the caller can retry) or, at minimum, never skip the
+ *   CRC check.  This test verifies the data-loss aspect: after a too-small
+ *   read returns FCB_INVALID_ARG, a subsequent read with a properly sized
+ *   buffer should still return the original record. */
+void test_fcb_read_vuln_small_buffer_consumes_record(void)
+{
+    flash_init(NULL);
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+
+    /* Write a single 100-byte record. */
+    uint8_t payload[100];
+    for (int i = 0; i < 100; i++)
+    {
+        payload[i] = (uint8_t)(i + 1);
+    }
+    rc = fcb_write(&fcb, payload, sizeof(payload));
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+
+    /* First read: buffer is too small for the 100-byte record. */
+    uint8_t small_buf[10];
+    size_t  out_len = 0;
+    rc = fcb_read(&fcb, small_buf, sizeof(small_buf), &out_len);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FCB_INVALID_ARG, rc,
+        "Expected FCB_INVALID_ARG when buffer is too small");
+
+    /* Second read: provide a properly sized buffer.  The record MUST still
+     * be retrievable.  On the current code this returns FCB_EMPTY because
+     * the first call already consumed it. */
+    uint8_t big_buf[200];
+    out_len = 0;
+    rc = fcb_read(&fcb, big_buf, sizeof(big_buf), &out_len);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FCB_OK, rc,
+        "VULN-3: too-small buffer consumed the record; data is lost");
+    TEST_ASSERT_EQUAL_UINT32(100U, (uint32_t)out_len);
+    TEST_ASSERT_EQUAL_MEMORY(payload, big_buf, 100);
+
+    flash_deinit();
+}
+
 /* ================================================================== */
 /*  Runner                                                            */
 /* ================================================================== */
@@ -800,4 +858,5 @@ void run_fcb_init_tests(void)
     RUN_TEST(test_fcb_init_fragmented_rule1_crc_fail_rule2);
     RUN_TEST(test_fcb_init_vuln_single_sector_unbounded_length);
     RUN_TEST(test_fcb_init_vuln_data_start_beyond_sector);
+    RUN_TEST(test_fcb_read_vuln_small_buffer_consumes_record);
 }

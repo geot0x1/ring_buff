@@ -1196,6 +1196,17 @@ static int fcb_read_nolock(Fcb* fcb, uint8_t* buf, size_t buf_len, size_t* len_o
  
     bool buffer_too_small = (hdr.length > buf_len);
 
+    /* VULN-3 fix: bail out BEFORE advancing the read pointer or skipping the
+     * CRC check.  Report the required size so the caller can retry. */
+    if (buffer_too_small)
+    {
+        if (len_out != NULL)
+        {
+            *len_out = hdr.length;
+        }
+        return FCB_INVALID_ARG;
+    }
+
     uint32_t data_addr_offset = curr_offset + FCB_RECORD_HDR_SIZE;
     uint32_t avail_data_space = sector_size - data_addr_offset;
 
