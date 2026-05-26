@@ -17,6 +17,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(unity)
 
 # Add subdirectories
+add_subdirectory(trace_logger)
 add_subdirectory(fcb)
 add_subdirectory(flash_mem)
 add_subdirectory(crc_gen)
