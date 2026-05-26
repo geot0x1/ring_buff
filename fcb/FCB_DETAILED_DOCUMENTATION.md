@@ -95,28 +95,9 @@ Address = 0x00100000 + (2 * 65536) + 50 = 0x00120032
 
 ## In-RAM Structure (Fcb)
 
-### Definition: `typedef struct Fcb` (48 bytes)
+### Definition: `typedef struct Fcb`
 
-```c
-typedef struct {
-    FcbConfig config;              // Full config copy (~56 bytes)
-    
-    uint32_t delete_sector;        // Sector index of delete pointer (0..num_sectors-1)
-    uint32_t delete_offset;        // Byte offset within delete sector (after sector header)
-    
-    uint32_t read_sector;          // Sector index of read pointer (0..num_sectors-1)
-    uint32_t read_offset;          // Byte offset within read sector (after sector header)
-    
-    uint32_t write_sector;         // Sector index where next record will be written
-    uint32_t write_offset;         // Byte offset within write sector (next free byte)
-    
-    uint32_t next_sequence;        // Next monotonic sequence number to assign
-    
-    uint32_t magic;                // Internal canary: 0xFCB0FCB0 (set after successful init)
-    
-    bool     is_mounted;           // Indicates FCB initialized and ready for use
-} Fcb;
-```
+See `fcb.h` for the canonical struct definition.
 
 ### Field Semantics
 
@@ -132,6 +113,7 @@ typedef struct {
 | `next_sequence` | `uint32_t` | 4 | Next sequence number to assign to new sectors |
 | `magic` | `uint32_t` | 4 | Canary value for validity check (0xFCB0FCB0) |
 | `is_mounted` | `bool` | 1 | True if FCB initialized successfully |
+| `corrupted_count` | `uint32_t` | 4 | Count of records auto-skipped by `fcb_read` due to CRC mismatch; reset to 0 on every `fcb_init`. Poll after any read loop to detect flash integrity events. |
 
 ### Pointer Semantics
 
@@ -151,26 +133,7 @@ delete_ptr → read_ptr → write_ptr (circular, wraps at num_sectors)
 
 ### Definition: `typedef struct FcbConfig` (~56 bytes)
 
-```c
-typedef struct {
-    uint32_t start_addr;              // Absolute flash address of first sector
-    uint32_t num_sectors;             // Number of sectors, 1..64
-    uint32_t sector_size;             // Size of each sector in bytes (e.g., 65536)
-    
-    void *flash_ctx;                  // Opaque context passed to flash callbacks
-    
-    // Flash driver callbacks (function pointers)
-    int (*flash_read)(void *ctx, uint32_t addr, uint8_t *buf, size_t len);
-    int (*flash_program)(void *ctx, uint32_t addr, const uint8_t *data, size_t len);
-    int (*flash_erase_sector)(void *ctx, uint32_t addr);
-    
-    // Thread safety callbacks (optional, may be NULL)
-    void (*lock)(void *mutex_ctx);
-    void (*unlock)(void *mutex_ctx);
-    
-    void *mutex_ctx;                  // Opaque context passed to lock/unlock
-} FcbConfig;
-```
+See `fcb.h` for the canonical struct definition.
 
 ### Field Semantics
 
@@ -294,26 +257,9 @@ Offset  Size  Field Name      Type       Hex Value (Valid)   Description
 11      5     reserved        uint8_t[]  0xFF,0xFF...        Always 0xFF (padding to 16 bytes)
 ```
 
-### Interpretation
-
-```c
-struct FcbSectorHdr {
-    uint32_t magic;      // 0x0FCBF1F0 → "0FCB F1F0" (FCB FIFO backwards, FCB FIFO forwards)
-    uint32_t sequence;   // Sector ID: older sectors have smaller values (considering wrap-around)
-    uint16_t data_start; // Start offset of first valid record; usually 16 bytes (after header)
-    uint8_t  status;     // 0xFF=valid (not yet trimmed), 0x00=consumed (safe to erase)
-    uint8_t  reserved[5];// All 0xFF in valid state
-};
-```
-
 ### Sequence Number Ordering
 
-Sequences are monotonically increasing: 1, 2, 3, ... They wrap at 2^32 but can be compared using signed distance math:
-
-```c
-// seq_a is newer than seq_b if:
-(int32_t)(seq_a - seq_b) > 0
-```
+Sequences are monotonically increasing: 1, 2, 3, ... They wrap at 2^32 and can be compared using signed distance math: `(int32_t)(seq_a - seq_b) > 0` gives a positive result when `seq_a` is newer.
 
 This correctly handles wrap-around:
 - seq_a=2, seq_b=1 → (2-1)=1 > 0 ✓ (seq_a newer)
@@ -355,16 +301,6 @@ Offset  Size  Field Name      Type       Hex Value (Valid)   Description
 3       1     status          uint8_t    0xFF or 0x00        0xFF=active, 0x00=consumed
 ```
 
-### Interpretation
-
-```c
-struct FcbRecordHdr {
-    uint8_t  magic;   // 0x5A (single-byte marker)
-    uint16_t length;  // Payload length: 1–1024 bytes (enforced at write-time)
-    uint8_t  status;  // 0xFF=active (unread or read but not deleted), 0x00=consumed (marked deleted)
-};
-```
-
 ### Complete Record Layout (On Flash)
 
 After the 4-byte header comes the data payload and a 1-byte CRC:
@@ -385,23 +321,6 @@ Total record size = 4 + length + 1 = 5 + length bytes
 - **Input:** Data payload only (NOT header, NOT status byte)
 - **Seed:** 0xFF (starting CRC value)
 - **Method:** Bit-serial, MSB-first
-
-```c
-uint8_t fcb_calc_crc8(uint8_t start_crc, const uint8_t *data, uint32_t len) {
-    uint8_t crc = start_crc;  // Start with 0xFF
-    for (uint32_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (uint8_t j = 0; j < 8; j++) {
-            if ((crc & 0x80) != 0) {
-                crc = (uint8_t)((crc << 1) ^ 0x31);
-            } else {
-                crc <<= 1;
-            }
-        }
-    }
-    return crc;
-}
-```
 
 ### Example Record (10-byte payload)
 
@@ -454,11 +373,6 @@ CRC written after data spill in Sector N+1
 ## Core Operations
 
 ### 1. fcb_init() - Mount and Recovery
-
-**Signature:**
-```c
-int fcb_init(Fcb *fcb, const FcbConfig *cfg);
-```
 
 **Return codes:** `FCB_OK`, `FCB_INVALID_ARG`, `FCB_ERR_FLASH`, `FCB_CORRUPTED`
 
@@ -549,11 +463,6 @@ Step 5: Finalization
 ---
 
 ### 2. fcb_write() - Append Record
-
-**Signature:**
-```c
-int fcb_write(Fcb *fcb, const uint8_t *data, size_t len);
-```
 
 **Parameters:**
 - `fcb`: Initialized FCB instance
@@ -646,18 +555,15 @@ AND remaining space < max record size (4 + 1024 + 1)
 
 ### 3. fcb_read() - Retrieve Next Unread Record
 
-**Signature:**
-```c
-int fcb_read(Fcb *fcb, uint8_t *buf, size_t buf_len, size_t *len_out);
-```
-
 **Parameters:**
 - `fcb`: Initialized FCB instance
 - `buf`: Destination buffer (must be ≥ 1024 bytes)
 - `buf_len`: Size of destination buffer
 - `len_out`: Output parameter, set to actual record length on success
 
-**Return codes:** `FCB_OK`, `FCB_EMPTY`, `FCB_CORRUPTED`, `FCB_INVALID_ARG`, `FCB_ERR_FLASH`
+**Return codes:** `FCB_OK`, `FCB_EMPTY`, `FCB_INVALID_ARG`, `FCB_ERR_FLASH`
+
+> **Note:** `FCB_CORRUPTED` is **never returned** to the caller. When a CRC mismatch is detected, the record is silently skipped, `fcb->corrupted_count` is incremented, and the next record is attempted. Check `corrupted_count` after a read loop to detect integrity events.
 
 **Locking:** Acquires mutex if configured
 
@@ -720,9 +626,9 @@ Step 5: Read and Verify CRC-8
   if stored_crc != calculated_crc:
     Advance read_ptr past the corrupted record (crc_offset + 1)
     Log CRC mismatch warning
-    return FCB_CORRUPTED
-    (read_ptr is advanced so next fcb_read() returns the following
-     record instead of retrying the same broken one forever)
+    Increment fcb->corrupted_count
+    Loop back to Step 1 to try the next record
+    (corrupted records are silently skipped; the caller is never stalled)
 
 Step 6: Advance read_ptr
   read_sector = crc_offset_sector
@@ -745,11 +651,6 @@ Step 7: Output and Return
 ---
 
 ### 4. fcb_delete() - Mark Records as Consumed
-
-**Signature:**
-```c
-int fcb_delete(Fcb *fcb);
-```
 
 **Return codes:** `FCB_OK`, `FCB_EMPTY`, `FCB_CORRUPTED`, `FCB_ERR_FLASH`
 
@@ -800,29 +701,9 @@ Return FCB_OK
 - **Batch-safe:** Even if power lost mid-delete, "partially deleted" records still readable
 - **Typical workflow:** Call fcb_read n times in a loop, then fcb_delete once
 
-#### Example Usage Loop
-
-```c
-uint8_t buf[1024];
-size_t len;
-
-// Read all available records
-while (fcb_read(&fcb, buf, sizeof(buf), &len) == FCB_OK) {
-    process_record(buf, len);
-}
-
-// Mark all as consumed in one operation
-fcb_delete(&fcb);
-```
-
 ---
 
 ### 5. fcb_trim() - Erase Oldest Sector
-
-**Signature:**
-```c
-int fcb_trim(Fcb *fcb);
-```
 
 **Return codes:** `FCB_OK`, `FCB_ERR_FLASH`
 
@@ -881,41 +762,17 @@ Note: Any records that were in the erased sector (read or unread) are lost.
 
 ### 6. fcb_is_full() - Check if Buffer is Full
 
-**Signature:**
-```c
-bool fcb_is_full(const Fcb *fcb);
-```
-
 **Return:** `true` if buffer cannot accept another max-size record, `false` otherwise.
 
-**Logic:**
-```c
-next_sector = (write_sector + 1) % num_sectors;
-if (next_sector == read_sector) {
-    // Next write would wrap into unread space; check if room for max record
-    free_space_in_current = sector_size - write_offset;
-    if (free_space_in_current < 4 + 1024 + 1) {
-        return true;  // Not enough room for max record
-    }
-}
-return false;  // Room available
-```
+**Logic:** Returns `true` when the next write would require wrapping into unread space with fewer than 1029 bytes remaining (4-byte header + 1024 payload + 1 CRC).
 
 ---
 
 ### 7. fcb_is_empty() - Check if Buffer is Empty
 
-**Signature:**
-```c
-bool fcb_is_empty(const Fcb *fcb);
-```
-
 **Return:** `true` if no unread records, `false` otherwise.
 
-**Logic:**
-```c
-return (read_sector == write_sector) && (read_offset == write_offset);
-```
+**Logic:** Returns `true` when the read pointer and write pointer are at the same sector and offset.
 
 ---
 
@@ -963,16 +820,12 @@ Result:
   On read, CRC calculated from partial data ≠ 0x7E
   fcb_read detects CRC mismatch
   → Advance read_ptr past the corrupted record
-  → Return FCB_CORRUPTED
-
-Usage Pattern:
-  If fcb_read returns FCB_CORRUPTED:
-    - read_ptr has already been advanced past the bad record
-    - Call fcb_read again → FCB_EMPTY or next valid record
-    - Only the corrupted record is lost; remaining records accessible
+  → fcb_read auto-skips the record, increments fcb->corrupted_count
+  → fcb_read continues scanning and returns the next valid record,
+     or FCB_EMPTY if no further records exist
 ```
 
-**Recovery:** Partial record detected via CRC. read_ptr auto-advanced to prevent stall.
+**Recovery:** Partial record detected via CRC. Skipped automatically; `corrupted_count` incremented. Only the interrupted record is lost; all following records remain accessible.
 
 ---
 
@@ -1060,14 +913,7 @@ Sector 1: sequence=0x00000001
 
 ### Mutex Callbacks
 
-If provided, FCB acquires a mutex before critical sections:
-
-```c
-// In fcb_write() / fcb_read() / fcb_delete()
-fcb_lock(fcb);           // Calls config.lock(config.mutex_ctx)
-  // ... perform operation ...
-fcb_unlock(fcb);         // Calls config.unlock(config.mutex_ctx)
-```
+If provided, FCB acquires a mutex before critical sections: `config.lock(config.mutex_ctx)` on entry, `config.unlock(config.mutex_ctx)` on exit.
 
 ### Thread-Safe Operations
 
@@ -1078,50 +924,11 @@ fcb_unlock(fcb);         // Calls config.unlock(config.mutex_ctx)
 
 ### Typical Multi-Threaded Usage
 
-```c
-// Initialization (single-threaded, before spawning worker threads)
-Fcb fcb;
-FcbConfig cfg = { ... lock, unlock callbacks ... };
-fcb_init(&fcb, &cfg);
-
-// Worker Thread 1: Write telemetry
-while (true) {
-    uint8_t telemetry[100];
-    read_sensor(telemetry);
-    fcb_write(&fcb, telemetry, sizeof(telemetry));  // Mutex acquired internally
-    sleep_ms(100);
-}
-
-// Worker Thread 2: Read and transmit
-while (true) {
-    uint8_t buf[1024];
-    size_t len;
-    while (fcb_read(&fcb, buf, sizeof(buf), &len) == FCB_OK) {  // Mutex acquired
-        tx_to_server(buf, len);
-    }
-    fcb_delete(&fcb);  // Mark all as consumed
-    sleep_s(60);
-}
-```
+Recommended pattern: one task calls `fcb_write` to produce records; another calls `fcb_read` in a loop followed by `fcb_delete` to consume them. Both share the same `Fcb` instance; the configured mutex serializes access automatically.
 
 ---
 
 ## Error Codes
-
-### Enumeration
-
-```c
-typedef enum {
-    FCB_OK               = 0,   // Operation successful
-    FCB_FULL             = 1,   // Buffer full; no room for new write
-    FCB_EMPTY            = 2,   // No records to read; no records to delete
-    FCB_NOT_CONSUMED     = 3,   // (Deprecated; no longer used)
-    FCB_CORRUPTED        = 4,   // CRC mismatch; record integrity check failed
-    FCB_INVALID_ARG      = 5,   // Invalid argument to API function
-    FCB_POWER_LOSS_DETECTED = 6,// (Deprecated; now uses FCB_CORRUPTED)
-    FCB_ERR_FLASH        = 7,   // Flash driver error (read/program/erase failed)
-} FcbError;
-```
 
 ### Semantics
 
@@ -1131,7 +938,7 @@ typedef enum {
 | `FCB_FULL` | Buffer cannot accept more writes | Wait for reads/deletes to free space |
 | `FCB_EMPTY` | No records available for read or delete | Retry later; check availability |
 | `FCB_NOT_CONSUMED` | (Deprecated; no longer used) | — |
-| `FCB_CORRUPTED` | CRC mismatch detected; data integrity compromised | Skip record; may indicate power loss |
+| `FCB_CORRUPTED` | CRC mismatch detected; returned by `fcb_delete` on a malformed record. `fcb_read` **never** returns this — it auto-skips and increments `corrupted_count`. | Check `corrupted_count` after read loops; investigate flash hardware on high counts |
 | `FCB_INVALID_ARG` | Invalid parameter to function | Debug argument values; check initialization state |
 | `FCB_ERR_FLASH` | Flash driver callback returned error | Verify flash hardware; check driver implementation |
 
@@ -1141,28 +948,11 @@ typedef enum {
 
 ### On-Flash Constants
 
-```c
-#define FCB_SECTOR_MAGIC        0x0FCBF1F0U      // Sector header magic
-#define FCB_RECORD_MAGIC        0x5AU            // Record header magic
-
-#define FCB_SECTOR_STATUS_VALID    0xFFU         // Sector valid (not yet consumed)
-#define FCB_SECTOR_STATUS_CONSUMED 0x00U         // Sector consumed (safe to erase)
-
-#define FCB_RECORD_ACTIVE       0xFFU            // Record active (not yet deleted)
-#define FCB_RECORD_CONSUMED     0x00U            // Record consumed (marked deleted)
-```
+Key values: sector magic `0x0FCBF1F0`, record magic `0x5A`, valid status `0xFF`, consumed status `0x00`. See `fcb.h` for full definitions.
 
 ### In-Memory Constants
 
-```c
-#define FCB_INIT_MAGIC          0xFCB0FCB0U      // Canary set after successful init
-
-#define FCB_MAX_SECTORS         64U              // Maximum number of sectors
-#define FCB_MAX_RECORD_SIZE     1024U            // Maximum payload per record
-
-#define FCB_SECTOR_HDR_SIZE     16U              // Bytes: sector header
-#define FCB_RECORD_HDR_SIZE     4U               // Bytes: record header
-```
+Key limits: max sectors 64, max record payload 1024 bytes, sector header 16 bytes, record header 4 bytes, init canary `0xFCB0FCB0`. See `fcb.h` for full definitions.
 
 ### Derived Limits
 
@@ -1180,232 +970,21 @@ Typical configuration:
   Total buffer = 512 KB
 ```
 
----
-
-## Examples
-
-### Example 1: Basic Initialization and Write
-
-```c
-#include "fcb.h"
-#include <stdint.h>
-#include <string.h>
-
-// Flash driver callbacks (simplified)
-int my_flash_read(void *ctx, uint32_t addr, uint8_t *buf, size_t len) {
-    // Read len bytes from SPI NOR flash at addr
-    return spi_nor_read(addr, buf, len);
-}
-
-int my_flash_program(void *ctx, uint32_t addr, const uint8_t *data, size_t len) {
-    // Write len bytes to SPI NOR flash at addr (up to 256 bytes)
-    return spi_nor_write(addr, data, len);
-}
-
-int my_flash_erase_sector(void *ctx, uint32_t addr) {
-    // Erase 64 KB sector containing addr
-    return spi_nor_erase(addr);
-}
-
-void main(void) {
-    // Configuration
-    FcbConfig cfg = {
-        .start_addr = 0x00100000,           // FCB starts at 1 MB in flash
-        .num_sectors = 8,
-        .sector_size = 65536,               // 64 KB sectors
-        .flash_ctx = NULL,
-        .flash_read = my_flash_read,
-        .flash_write = my_flash_program,
-        .flash_erase = my_flash_erase_sector,
-        .lock = NULL,                       // No thread safety needed
-        .unlock = NULL,
-        .mutex_ctx = NULL,
-    };
-
-    // Initialize FCB
-    Fcb fcb;
-    int rc = fcb_init(&fcb, &cfg);
-    if (rc != FCB_OK) {
-        printf("FCB init failed: %d\n", rc);
-        return;
-    }
-    printf("FCB initialized: %u sectors, %u bytes/sector\n", 
-           cfg.num_sectors, cfg.sector_size);
-
-    // Write a record
-    uint8_t data[] = "Hello, FCB!";
-    rc = fcb_write(&fcb, data, sizeof(data) - 1);  // Exclude null terminator
-    if (rc != FCB_OK) {
-        printf("FCB write failed: %d\n", rc);
-        return;
-    }
-    printf("Wrote %zu bytes\n", sizeof(data) - 1);
-
-    // Write another record
-    uint8_t data2[] = "Record 2";
-    rc = fcb_write(&fcb, data2, sizeof(data2) - 1);
-    if (rc != FCB_OK) {
-        printf("FCB write failed: %d\n", rc);
-        return;
-    }
-    printf("Wrote %zu bytes\n", sizeof(data2) - 1);
-}
-```
-
 ### Example 2: Read and Delete Workflow
 
-```c
-void telemetry_workflow(Fcb *fcb) {
-    uint8_t buf[1024];
-    size_t len;
-    int record_count = 0;
-
-    // Read all unread records
-    while (fcb_read(fcb, buf, sizeof(buf), &len) == FCB_OK) {
-        // Process record
-        printf("Record %d: %u bytes\n", record_count++, len);
-        
-        // Example: print as string if null-terminated
-        if (len < sizeof(buf)) {
-            buf[len] = '\0';
-            printf("  Data: %s\n", (char *)buf);
-        }
-    }
-
-    printf("Read %d records\n", record_count);
-
-    // Mark all read records as consumed (published to server)
-    if (fcb_delete(fcb) != FCB_OK) {
-        printf("FCB delete failed\n");
-        return;
-    }
-    printf("Marked %d records as consumed\n", record_count);
-
-    // Trim oldest sector to reclaim space (automatically advances pointers)
-    int trim_rc = fcb_trim(fcb);
-    if (trim_rc == FCB_OK) {
-        printf("Trimmed oldest sector\n");
-    } else if (trim_rc == FCB_ERR_FLASH) {
-        printf("Trim failed: flash driver error\n");
-    }
-}
-```
+Read all records in a loop with `fcb_read`, process each one, then call `fcb_delete` to mark the batch consumed. Follow with `fcb_trim` to erase the oldest sector and reclaim space.
 
 ### Example 3: Continuous Logging with Full-Buffer Handling
 
-```c
-void continuous_logging(Fcb *fcb) {
-    uint32_t log_id = 0;
-
-    while (1) {
-        // Create a log record
-        uint8_t log_record[256];
-        uint16_t len = snprintf((char *)log_record, sizeof(log_record),
-                                "LOG_%u: timestamp=0x%08x, event=SENSOR_READ",
-                                log_id++, get_timestamp());
-
-        // Try to write
-        int rc = fcb_write(fcb, log_record, len);
-
-        if (rc == FCB_OK) {
-            printf("Logged record %u\n", log_id - 1);
-        } else if (rc == FCB_FULL) {
-            printf("Buffer full, cannot write more\n");
-            
-            // In production, you would:
-            // 1. Stop logging temporarily
-            // 2. Read all records
-            // 3. Upload to server
-            // 4. Delete consumed records
-            // 5. Trim if needed
-            // 6. Resume logging
-            break;  // Stop for now
-        } else {
-            printf("Write error: %d\n", rc);
-            break;
-        }
-
-        sleep_ms(100);  // Log rate: 10 records/sec
-    }
-}
-```
+Attempt `fcb_write` in a loop. When `FCB_FULL` is returned: stop producing, read and upload all records, delete consumed records, trim if needed, then resume.
 
 ### Example 4: Recovery After Power Loss
 
-```c
-void power_restored_handler(void) {
-    FcbConfig cfg = { ... };  // Same config as before
-    Fcb fcb;
-
-    // fcb_init scans all sectors and recovers state
-    int rc = fcb_init(&fcb, &cfg);
-
-    if (rc == FCB_OK) {
-        printf("FCB recovered after power loss\n");
-        printf("Write pointer: Sector %u, offset %u\n", 
-               fcb.write_sector, fcb.write_offset);
-        printf("Read pointer: Sector %u, offset %u\n", 
-               fcb.read_sector, fcb.read_offset);
-        printf("Unread records available for upload\n");
-
-        // Existing unread records are preserved
-        // Partially-written records (CRC fail) are skipped
-        // Can resume normal operation immediately
-    } else {
-        printf("FCB recovery failed: %d\n", rc);
-        // Handle error (factory reset, etc.)
-    }
-}
-```
+Call `fcb_init` with the same `FcbConfig` as before. It scans all sectors, recovers pointers, and auto-skips any partially-written records (CRC failures). Unread records written before the power event are preserved.
 
 ### Example 5: Memory Layout Calculation
 
-```c
-void print_fcb_layout(const Fcb *fcb) {
-    uint32_t total_flash = fcb->config.num_sectors * fcb->config.sector_size;
-    uint32_t header_overhead = fcb->config.num_sectors * FCB_SECTOR_HDR_SIZE;
-    uint32_t usable = total_flash - header_overhead;
-
-    printf("=== FCB Memory Layout ===\n");
-    printf("Start address:    0x%08x\n", fcb->config.start_addr);
-    printf("Number of sectors: %u\n", fcb->config.num_sectors);
-    printf("Sector size:      %u bytes\n", fcb->config.sector_size);
-    printf("\n");
-    printf("Total buffer:     %u bytes (%.1f KB)\n", total_flash, total_flash / 1024.0);
-    printf("Header overhead:  %u bytes\n", header_overhead);
-    printf("Usable for data:  %u bytes (%.1f KB)\n", usable, usable / 1024.0);
-    printf("\n");
-
-    // Pointer state
-    uint32_t delete_addr = fcb->config.start_addr + 
-                           (fcb->delete_sector * fcb->config.sector_size) + 
-                           fcb->delete_offset;
-    uint32_t read_addr = fcb->config.start_addr + 
-                         (fcb->read_sector * fcb->config.sector_size) + 
-                         fcb->read_offset;
-    uint32_t write_addr = fcb->config.start_addr + 
-                          (fcb->write_sector * fcb->config.sector_size) + 
-                          fcb->write_offset;
-
-    printf("Pointer Locations:\n");
-    printf("Delete ptr: Sector %u, offset %u (addr 0x%08x)\n", 
-           fcb->delete_sector, fcb->delete_offset, delete_addr);
-    printf("Read ptr:   Sector %u, offset %u (addr 0x%08x)\n", 
-           fcb->read_sector, fcb->read_offset, read_addr);
-    printf("Write ptr:  Sector %u, offset %u (addr 0x%08x)\n", 
-           fcb->write_sector, fcb->write_offset, write_addr);
-    printf("\n");
-
-    // Check state
-    if (fcb_is_full(fcb)) {
-        printf("State: FULL (cannot accept new writes)\n");
-    } else if (fcb_is_empty(fcb)) {
-        printf("State: EMPTY (no records to read)\n");
-    } else {
-        printf("State: NORMAL (has unread records, space available)\n");
-    }
-}
-```
+Usable capacity = `num_sectors * sector_size - (num_sectors * FCB_SECTOR_HDR_SIZE)`. Absolute flash address = `config.start_addr + (sector_index * config.sector_size) + offset_in_sector`.
 
 ### Example 6: Byte-Level Hexdump Interpretation
 
@@ -1471,19 +1050,11 @@ If reading into buf[1024]:
 
 ### New Public Helper Function: `fcb_seq_diff()`
 
-**Signature:**
-```c
-int32_t fcb_seq_diff(uint32_t a, uint32_t b);
-```
-
 **Purpose:** Calculate signed distance between two monotonic sequence numbers, accounting for 32-bit wrap-around.
 
 **Usage:** Returns positive if `a` is newer than `b`, negative if older, zero if equal.
 
-**Implementation:**
-```c
-return (int32_t)(a - b);
-```
+**Implementation:** `return (int32_t)(a - b);`
 
 **Examples:**
 ```
@@ -1497,37 +1068,11 @@ Used internally in `fcb_find_oldest_newest()` to determine sector chronological 
 
 ---
 
-### Pseudo-Code Templates for AI Integration
+### Common Patterns
 
-```
-// Template: Traverse all unread records
-```c
-while (fcb_is_empty(fcb) == false) {
-    uint8_t buf[1024];
-    size_t len;
-    int rc = fcb_read(fcb, buf, sizeof(buf), &len);
-    if (rc != FCB_OK) break;  // Corrupted record or other error
-    process(buf, len);
-}
-```
-
-```
-// Template: Check flash address validity
-```c
-bool is_valid_addr(const Fcb *fcb, uint32_t addr) {
-    uint32_t end_addr = fcb->config.start_addr + 
-                        (fcb->config.num_sectors * fcb->config.sector_size);
-    return addr >= fcb->config.start_addr && addr < end_addr;
-}
-```
-
-```
-// Template: Calculate record overhead
-```c
-uint32_t record_overhead(uint32_t payload_len) {
-    return 4 + payload_len + 1;  // header + data + CRC
-}
-```
+- **Traverse all unread records:** Call `fcb_read` in a loop until it returns non-`FCB_OK`, process each record, then call `fcb_delete` to mark all consumed.
+- **Validate flash address:** Check `addr >= config.start_addr && addr < (config.start_addr + config.num_sectors * config.sector_size)`.
+- **Calculate record overhead:** Total bytes = `4 + payload_len + 1` (header + data + CRC).
 
 ---
 
