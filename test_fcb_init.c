@@ -42,6 +42,8 @@ void test_fcb_init_consumed_records_cross_sector(void);
 void test_fcb_init_partial_consumed_multi_sector(void);
 void test_fcb_init_fragmented_rule1_crc_match(void);
 void test_fcb_init_fragmented_rule1_crc_fail_rule2(void);
+void test_fcb_init_vuln_single_sector_unbounded_length(void);
+void test_fcb_init_vuln_data_start_beyond_sector(void);
 
 /* ================================================================== */
 /*  Helper implementations                                            */
@@ -656,6 +658,125 @@ void test_fcb_init_fragmented_rule1_crc_fail_rule2(void)
 }
 
 /* ================================================================== */
+/*  Vulnerability tests                                                */
+/* ================================================================== */
+
+/* VULNERABILITY (VULN-1):
+ *   fcb_recover_pointers_chain rejects records with length > FCB_MAX_RECORD_SIZE
+ *   (fcb.c line ~711), but fcb_recover_pointers_single does NOT perform the same
+ *   check.  A corrupted record header with magic = 0x5A and length = 0xFFFF in
+ *   the only valid sector is therefore accepted, causing:
+ *
+ *       last_valid_offset = 16 + 4 + 65535 + 1 = 65556
+ *
+ *   The final wrap guard `if (write_offset == sector_size)` checks for an exact
+ *   match only, so any value > sector_size silently bypasses it.  After init,
+ *   fcb.write_offset is 65556 > sector_size = 65536.  The next call to fcb_write
+ *   will compute `avail_space = sector_size - write_offset`, an unsigned
+ *   underflow yielding ~4 GiB of "available" space — a classic out-of-bounds
+ *   write primitive.
+ *
+ *   This test asserts safe behaviour: write_offset must stay within sector
+ *   bounds.  It fails on the current code.  Fix: add the same
+ *   `length > FCB_MAX_RECORD_SIZE` check that exists in the chain walker. */
+void test_fcb_init_vuln_single_sector_unbounded_length(void)
+{
+    flash_init(NULL);
+
+    /* Only sector 0 is valid; remaining sectors stay fully erased so
+     * fcb_find_oldest_newest returns oldest==newest==0 and recovery dispatches
+     * to fcb_recover_pointers_single. */
+    write_sector_hdr(0, 1, FCB_SECTOR_HDR_SIZE, FCB_SECTOR_STATUS_VALID);
+
+    /* Planted record header: valid magic but a wildly oversized length.
+     * No payload or CRC are written — single-sector recovery does not validate
+     * either, it only walks structurally. */
+    FcbRecordHdr bad;
+    bad.magic  = FCB_RECORD_MAGIC;
+    bad.length = 0xFFFFU;            /* > FCB_MAX_RECORD_SIZE (1024)            */
+    bad.status = FCB_RECORD_ACTIVE;
+    (void)flash_write(0U * SECTOR_SIZE + FCB_SECTOR_HDR_SIZE,
+                      &bad, (uint32_t)sizeof(bad));
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = SECTOR_SIZE;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+
+    /* SAFETY INVARIANT: pointers must remain inside the sector.
+     * On the current code, fcb.write_offset == 65556, so this fails loudly. */
+    TEST_ASSERT_TRUE_MESSAGE(
+        fcb.write_offset <= SECTOR_SIZE,
+        "VULN-1: single-sector recovery accepts oversized record length; "
+        "write_offset exceeds sector_size and will underflow on next write");
+    TEST_ASSERT_TRUE_MESSAGE(
+        fcb.write_sector < NUM_SECTORS,
+        "VULN-1: write_sector escaped configured range");
+
+    flash_deinit();
+}
+
+/* VULNERABILITY (VULN-2):
+ *   Both fcb_recover_pointers_single and fcb_recover_pointers_chain start the
+ *   record scan from `sec_hdr.data_start` without bounding it against
+ *   `sector_size`.  If a corrupted sector header reports a data_start >=
+ *   sector_size, the inner while-loop is skipped, `last_valid_offset` retains
+ *   the bogus value, and the final guard `if (write_offset == sector_size)`
+ *   matches only exact equality, leaving write_offset out of range.
+ *
+ *   To stay within the uint16_t range of `data_start` we shrink sector_size to
+ *   16 KiB and plant data_start = 50000.
+ *
+ *   This test asserts the safe invariant; it fails on the current code.
+ *   Fix: clamp `offset = sec_hdr.data_start` to `[FCB_SECTOR_HDR_SIZE,
+ *   sector_size]`, identical to what fcb_get_next_record_offset already does
+ *   for the read path. */
+void test_fcb_init_vuln_data_start_beyond_sector(void)
+{
+    const uint32_t small_sector = 16384U;          /* 16 KiB                  */
+    const uint16_t bogus_start  = (uint16_t)50000; /* > small_sector          */
+
+    flash_init(NULL);
+
+    /* Hand-craft a single valid sector header at sector 0 with a bogus
+     * data_start.  Other sectors remain fully erased so recovery enters
+     * single-sector mode. */
+    FcbSectorHdr hdr;
+    hdr.magic      = FCB_SECTOR_MAGIC;
+    hdr.sequence   = 1U;
+    hdr.data_start = bogus_start;
+    hdr.status     = FCB_SECTOR_STATUS_VALID;
+    memset(hdr.reserved, 0xFF, sizeof(hdr.reserved));
+    (void)flash_write(0U, &hdr, (uint32_t)sizeof(hdr));
+
+    Fcb       fcb;
+    FcbConfig cfg;
+    setup_config(&cfg);
+    cfg.sector_size = small_sector;
+    cfg.num_sectors = NUM_SECTORS;
+
+    int rc = fcb_init(&fcb, &cfg);
+    TEST_ASSERT_EQUAL_INT(FCB_OK, rc);
+
+    /* SAFETY INVARIANTS — both must hold to prevent OOB on next write. */
+    TEST_ASSERT_TRUE_MESSAGE(
+        fcb.write_offset <= small_sector,
+        "VULN-2: bogus data_start propagates to write_offset > sector_size");
+    TEST_ASSERT_TRUE_MESSAGE(
+        fcb.read_offset <= small_sector,
+        "VULN-2: bogus data_start propagates to read_offset > sector_size");
+    TEST_ASSERT_TRUE_MESSAGE(
+        fcb.write_sector < NUM_SECTORS,
+        "VULN-2: write_sector escaped configured range");
+
+    flash_deinit();
+}
+
+/* ================================================================== */
 /*  Runner                                                            */
 /* ================================================================== */
 
@@ -677,4 +798,6 @@ void run_fcb_init_tests(void)
     RUN_TEST(test_fcb_init_partial_consumed_multi_sector);
     RUN_TEST(test_fcb_init_fragmented_rule1_crc_match);
     RUN_TEST(test_fcb_init_fragmented_rule1_crc_fail_rule2);
+    RUN_TEST(test_fcb_init_vuln_single_sector_unbounded_length);
+    RUN_TEST(test_fcb_init_vuln_data_start_beyond_sector);
 }

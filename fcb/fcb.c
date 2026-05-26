@@ -647,7 +647,7 @@ static int fcb_recover_pointers_single(Fcb* fcb, int sector)
     }
     fcb->write_offset = last_valid_offset;
 
-    if (fcb->write_offset == fcb->config.sector_size)
+    if (fcb->write_offset >= fcb->config.sector_size)
     {
         fcb->write_sector = fcb_next_sector(fcb, fcb->write_sector);
         fcb->write_offset = FCB_SECTOR_HDR_SIZE;
@@ -770,7 +770,7 @@ static int fcb_recover_pointers_chain(Fcb* fcb, int oldest_sector, int newest_se
         curr_sector = fcb_next_sector(fcb, curr_sector);
     }
 
-    if (fcb->write_offset == fcb->config.sector_size)
+    if (fcb->write_offset >= fcb->config.sector_size)
     {
         fcb->write_sector = fcb_next_sector(fcb, fcb->write_sector);
         fcb->write_offset = FCB_SECTOR_HDR_SIZE;
